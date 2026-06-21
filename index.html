@@ -290,6 +290,38 @@
   }
   .deposit-total-line b{color:var(--leather-dark); font-family:'IBM Plex Mono',monospace; font-size:14px;}
 
+  .denom-grid{
+    display:grid; grid-template-columns:repeat(auto-fill, minmax(110px,1fr)); gap:10px;
+    margin-bottom:6px;
+  }
+  .denom-cell{
+    border:1px solid var(--paper-line); border-radius:6px; background:#FFFDF6;
+    padding:8px 9px 9px; text-align:center;
+  }
+  .denom-cell .note{
+    font-family:'IBM Plex Mono',monospace; font-weight:700; font-size:12.5px;
+    color:var(--leather-dark); margin-bottom:5px;
+  }
+  .denom-cell .note::before{content:'₹';}
+  .denom-cell input{
+    width:100%; padding:6px 4px; font-size:13px; text-align:center;
+    border:1px solid var(--paper-line); border-radius:4px;
+    font-family:'IBM Plex Mono',monospace; color:var(--ink); background:#fff;
+  }
+  .denom-cell input:focus{outline:none; border-color:var(--gold);}
+  .denom-cell .sub{
+    margin-top:5px; font-size:10.5px; color:var(--ink-soft);
+    font-family:'IBM Plex Mono',monospace;
+  }
+  .denom-report-row td{padding:8px 13px 14px !important; border:1px solid var(--paper-line); border-top:none !important; background:#FFFDF6;}
+  .denom-report{display:flex; flex-wrap:wrap; gap:6px;}
+  .denom-chip{
+    font-family:'IBM Plex Mono',monospace; font-size:11.5px; font-weight:600;
+    color:var(--leather-dark); background:#F3E9CC;
+    border:1px solid var(--paper-line); border-radius:5px;
+    padding:4px 9px;
+  }
+
   /* ---------- Live summary : the signature element ---------- */
   .summary-grid{
     display:grid; grid-template-columns:repeat(4, 1fr); gap:14px; margin-top:6px;
@@ -422,6 +454,7 @@
     h1{font-size:24px;}
   }
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 </head>
 <body>
 
@@ -496,10 +529,14 @@
       <button class="add-line" id="addDepositBtn" type="button">+ Add deposit line</button>
       <div class="deposit-total-line">Total deposited today: <b id="depositRunningTotal">₹ 0.00</b></div>
 
+      <div class="divider-label" style="margin-top:18px;">Cash Denomination — Send To Home</div>
+      <div class="denom-grid" id="denomGrid"></div>
+      <div class="deposit-total-line">Total (from denomination): <b id="denomRunningTotal">₹ 0.00</b></div>
+
       <div class="field-row">
         <div class="field">
           <label for="cashToHome">Cash Send To Home (₹)</label>
-          <input type="number" id="cashToHome" min="0" step="0.01" value="0">
+          <input type="number" id="cashToHome" min="0" step="0.01" value="0" readonly style="background:#F3EEDD; cursor:not-allowed;">
         </div>
       </div>
 
@@ -529,6 +566,7 @@
       </div>
       <button class="btn btn-primary" id="loadDayBtn" style="margin-bottom:1px;">Load report</button>
       <button class="btn btn-ghost" id="printDayBtn" style="margin-bottom:1px;">Print / Save PDF</button>
+      <button class="btn btn-ghost" id="whatsappDayBtn" style="margin-bottom:1px; display:none;">Send PDF via WhatsApp</button>
       <button class="btn btn-ghost" id="editDayBtn" style="margin-bottom:1px; display:none;">Edit this entry</button>
     </div>
     <div id="dayReportArea"></div>
@@ -775,6 +813,66 @@
     return getDepositList().reduce((s,d)=>s+num(d.amount),0);
   }
 
+  /* ---------------- denomination breakdown for cash send to home ---------------- */
+  const DENOMS = [500, 200, 100, 50];
+
+  function buildDenomGrid(){
+    const grid = $('denomGrid');
+    grid.innerHTML = DENOMS.map(n => `
+      <div class="denom-cell">
+        <div class="note">${n}</div>
+        <input type="number" class="denom-qty" data-note="${n}" min="0" step="1" placeholder="0" value="">
+        <div class="sub" data-sub="${n}">= ₹0.00</div>
+      </div>
+    `).join('');
+    grid.querySelectorAll('.denom-qty').forEach(inp=>{
+      inp.addEventListener('input', ()=>{ updateDenomTotal(); recalcLive(); });
+    });
+  }
+
+  function getDenomBreakdown(){
+    const rows = document.querySelectorAll('#denomGrid .denom-qty');
+    const list = [];
+    rows.forEach(inp=>{
+      const note = num(inp.dataset.note);
+      const qty = num(inp.value);
+      if(qty) list.push({note, qty, amount: note*qty});
+    });
+    return list;
+  }
+
+  function getDenomTotal(){
+    return getDenomBreakdown().reduce((s,d)=>s+d.amount,0);
+  }
+
+  function updateDenomTotal(){
+    document.querySelectorAll('#denomGrid .denom-qty').forEach(inp=>{
+      const note = num(inp.dataset.note);
+      const qty = num(inp.value);
+      const sub = document.querySelector(`#denomGrid .sub[data-sub="${note}"]`);
+      if(sub) sub.textContent = '= ' + fmt(note*qty);
+    });
+    const total = getDenomTotal();
+    $('denomRunningTotal').textContent = fmt(total);
+    $('cashToHome').value = total.toFixed(2);
+  }
+
+  function clearDenomGrid(){
+    document.querySelectorAll('#denomGrid .denom-qty').forEach(inp=> inp.value = '');
+    updateDenomTotal();
+  }
+
+  function setDenomGrid(breakdown){
+    clearDenomGrid();
+    (breakdown || []).forEach(d=>{
+      const inp = document.querySelector(`#denomGrid .denom-qty[data-note="${d.note}"]`);
+      if(inp) inp.value = d.qty;
+    });
+    updateDenomTotal();
+  }
+
+  buildDenomGrid();
+
   function computeTotals(opening, fromHome, sale, expenses, deposit, toHome){
     const expenseSum = expenses.reduce((s,e)=>s+num(e.amount),0);
     const totalCash = opening + fromHome + sale;
@@ -799,7 +897,7 @@
     $('depositRunningTotal').textContent = fmt(deposit);
   }
 
-  ['openingBalance','cashFromHome','todaySale','cashToHome'].forEach(id=>{
+  ['openingBalance','cashFromHome','todaySale'].forEach(id=>{
     $(id).addEventListener('input', recalcLive);
   });
 
@@ -839,6 +937,7 @@
         $('cashFromHome').value = v.cashReceivedFromHome ?? 0;
         $('todaySale').value = v.todayCashSale ?? 0;
         $('cashToHome').value = v.cashSendToHome ?? 0;
+        setDenomGrid(v.cashSendToHomeDenomination || []);
         (v.expenses && v.expenses.length ? v.expenses : [{}]).forEach(e=>{
           addExpenseRow(e.type || 'expense', e.category || e.label || '', (e.amount ?? ''), e.narration || '');
         });
@@ -865,6 +964,7 @@
     $('cashFromHome').value = 0;
     $('todaySale').value = 0;
     $('cashToHome').value = 0;
+    clearDenomGrid();
     $('entryLoadHint').textContent = prev !== null
       ? 'No entry yet for ' + niceDate(dateIso) + '. Opening balance pulled from ' + niceDate(prev.date) + "'s closing balance."
       : 'No entry yet for ' + niceDate(dateIso) + '. This looks like your first entry — set an opening balance.';
@@ -906,6 +1006,7 @@
       deposits: deposits,
       cashDepositToBank: deposit,
       cashSendToHome: toHome,
+      cashSendToHomeDenomination: getDenomBreakdown(),
       totalCash: t.totalCash,
       totalExpenseSide: t.totalExpenseSide,
       balanceCash: t.balanceCash,
@@ -981,6 +1082,7 @@
               <tr class="total-row"><td class="lab">Total Cash</td><td class="amt">${fmt(entry.totalCash)}</td></tr>
               <tr><td class="lab">Balance Cash</td><td class="amt">${fmt(entry.balanceCash)}</td></tr>
               <tr><td class="lab">Cash Send To Home</td><td class="amt">${fmt(entry.cashSendToHome)}</td></tr>
+              ${entry.cashSendToHomeDenomination && entry.cashSendToHomeDenomination.length ? `<tr class="denom-report-row"><td colspan="2"><div class="denom-report">${entry.cashSendToHomeDenomination.slice().sort((a,b)=>b.note-a.note).map(d=>`<span class="denom-chip">₹${d.note} × ${d.qty} = ₹${fmt(d.amount)}</span>`).join('')}</div></td></tr>` : ''}
               <tr class="closing-row"><td class="lab">Closing Balance</td><td class="amt">${fmt(entry.closingBalance)}</td></tr>
             </table>
           </div>
@@ -1007,6 +1109,7 @@
         <div>Go to "New Entry", pick this date and add the day's figures.</div>
       </div></div>`;
       $('editDayBtn').style.display = 'none';
+      $('whatsappDayBtn').style.display = 'none';
       return;
     }
     let entry;
@@ -1024,6 +1127,103 @@
       $('entryDate').value = dateIso;
       loadEntryIntoForm(dateIso);
     };
+
+    $('whatsappDayBtn').style.display = 'inline-block';
+    $('whatsappDayBtn').onclick = ()=> sharePdfViaWhatsApp(dateIso, bizName);
+  }
+
+  function buildWhatsAppText(entry, dateIso, bizName){
+    const expSum = (entry.expenses||[]).reduce((s,x)=>s+num(x.amount),0);
+    const lines = [];
+    lines.push('*' + (bizName || 'Daily Cash Book') + '*');
+    lines.push(niceDate(dateIso));
+    lines.push('');
+    lines.push('Opening Balance: ' + fmt(entry.openingBalance));
+    lines.push('Cash Received From Home: ' + fmt(entry.cashReceivedFromHome));
+    lines.push('Today Cash Sale & Receipt: ' + fmt(entry.todayCashSale));
+    lines.push('*Total Cash: ' + fmt(entry.totalCash) + '*');
+    lines.push('');
+    if((entry.expenses||[]).length){
+      lines.push('Expenses:');
+      entry.expenses.forEach(e=>{
+        lines.push('  • ' + (e.category || 'Expense') + ': ' + fmt(e.amount) + (e.narration ? ' (' + e.narration + ')' : ''));
+      });
+      lines.push('Total Expense: ' + fmt(expSum));
+      lines.push('');
+    }
+    if((entry.deposits||[]).length){
+      const depTotal = entry.deposits.reduce((s,d)=>s+num(d.amount),0);
+      if(depTotal > 0){
+        lines.push('Cash Deposit To Bank:');
+        entry.deposits.forEach(d=>{
+          if(num(d.amount)) lines.push('  • ' + fmt(d.amount) + (d.note ? ' (' + d.note + ')' : ''));
+        });
+        lines.push('Total Deposit: ' + fmt(depTotal));
+        lines.push('');
+      }
+    }
+    lines.push('Balance Cash: ' + fmt(entry.balanceCash));
+    lines.push('Cash Send To Home: ' + fmt(entry.cashSendToHome));
+    if(entry.cashSendToHomeDenomination && entry.cashSendToHomeDenomination.length){
+      const denomStr = entry.cashSendToHomeDenomination.slice().sort((a,b)=>b.note-a.note)
+        .map(d=>'₹' + d.note + ' x ' + d.qty + ' = ' + fmt(d.amount)).join(', ');
+      lines.push('  (' + denomStr + ')');
+    }
+    lines.push('');
+    lines.push('*Closing Balance: ' + fmt(entry.closingBalance) + '*');
+    return lines.join('\n');
+  }
+
+  async function sharePdfViaWhatsApp(dateIso, bizName){
+    const btn = $('whatsappDayBtn');
+    const originalLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Preparing PDF…';
+    try{
+      const source = document.querySelector('#dayReportArea .ledger-sheet') || $('dayReportArea');
+      const fileName = 'cash-book-' + dateIso + '.pdf';
+      const opt = {
+        margin: 8,
+        filename: fileName,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#FFFDF6' },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+      };
+      const pdfBlob = await html2pdf().set(opt).from(source).outputPdf('blob');
+      const pdfFile = new File([pdfBlob], fileName, { type: 'application/pdf' });
+
+      if(navigator.canShare && navigator.canShare({ files: [pdfFile] })){
+        await navigator.share({
+          files: [pdfFile],
+          title: (bizName || 'Daily Cash Book') + ' — ' + niceDate(dateIso),
+          text: (bizName || 'Daily Cash Book') + ' report for ' + niceDate(dateIso)
+        });
+      } else {
+        // Desktop / unsupported browsers: download the PDF, then open WhatsApp Web so it can be attached manually
+        const url = URL.createObjectURL(pdfBlob);
+        const a = document.createElement('a');
+        a.href = url; a.download = fileName;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(()=> URL.revokeObjectURL(url), 4000);
+        window.open('https://web.whatsapp.com/', '_blank');
+        showEntryStatusOnArea('PDF downloaded. Attach "' + fileName + '" in the WhatsApp chat that just opened.');
+      }
+    } catch(err){
+      console.error(err);
+      alert('Could not prepare the PDF. Please try again.');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+    }
+  }
+
+  function showEntryStatusOnArea(msg){
+    const area = $('dayReportArea');
+    const note = document.createElement('div');
+    note.className = 'status-msg';
+    note.style.cssText = 'margin-top:10px; color:var(--good); font-family:IBM Plex Mono,monospace; font-size:12.5px;';
+    note.textContent = msg;
+    area.appendChild(note);
   }
 
   $('loadDayBtn').addEventListener('click', ()=> loadDayReport($('dayReportDate').value));
