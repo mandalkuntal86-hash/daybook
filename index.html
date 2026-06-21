@@ -1821,7 +1821,7 @@
     const paymentTotal = payeesList.reduce((s,p)=>s+num(p.amount),0);
     const deposit = num($('bankCashDeposit').value);
     const contra = num($('contraAmount').value);
-    const closing = opening + collection - paymentTotal - deposit - contra;
+    const closing = (opening + collection + deposit) - (paymentTotal + contra);
     $('bankClosingBalance').value = closing.toFixed(2);
   }
   ['bankOpeningBalance','bankTotalCollection','bankCashDeposit','contraAmount'].forEach(id=>{
