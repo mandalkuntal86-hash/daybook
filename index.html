@@ -755,7 +755,8 @@
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
   import {
-    getFirestore, doc, getDoc, setDoc, deleteDoc, collection, getDocs
+    getFirestore, doc, getDoc, setDoc, deleteDoc, collection, getDocs,
+    query, orderBy, startAt, endAt, documentId
   } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
 
   const firebaseConfig = {
@@ -807,9 +808,18 @@
   async function storageList(prefix, shared){
     try{
       const colRef = collection(db, 'shop', SHOP_ID, 'data');
-      const snap = await getDocs(colRef);
+      let q = colRef;
+      if(prefix){
+        // Document IDs are sorted lexicographically, so a range from "prefix"
+        // up to "prefix\uf8ff" (a very high code point) returns exactly the
+        // docs whose id starts with prefix — fetched server-side, instead of
+        // downloading every document in the whole database every time.
+        const p = sanitizeKey(prefix);
+        q = query(colRef, orderBy(documentId()), startAt(p), endAt(p + '\uf8ff'));
+      }
+      const snap = await getDocs(q);
       const keys = [];
-      snap.forEach(d=>{ if(!prefix || d.id.startsWith(sanitizeKey(prefix))) keys.push(d.id); });
+      snap.forEach(d=> keys.push(d.id));
       return keys;
     } catch(e){ console.error('storage list failed', e); return []; }
   }
@@ -1613,11 +1623,9 @@
       lastMonthRows = [];
       return;
     }
+    const results = await Promise.all(keys.map(k => storageGet(k, false)));
     const entries = [];
-    for(const k of keys.sort()){
-      const r = await storageGet(k, false);
-      if(r && r.value){ try{ entries.push(JSON.parse(r.value)); }catch(e){} }
-    }
+    results.forEach(r=>{ if(r && r.value){ try{ entries.push(JSON.parse(r.value)); }catch(e){} } });
     entries.sort((a,b)=> a.date.localeCompare(b.date));
     lastMonthRows = entries;
 
@@ -2022,11 +2030,9 @@
       </div></div>`;
       return;
     }
+    const results = await Promise.all(keys.map(k => storageGet(k, false)));
     const entries = [];
-    for(const k of keys){
-      const r = await storageGet(k, false);
-      if(r && r.value){ try{ const v = JSON.parse(r.value); v._key = k; entries.push(v); }catch(e){} }
-    }
+    results.forEach((r,i)=>{ if(r && r.value){ try{ const v = JSON.parse(r.value); v._key = keys[i]; entries.push(v); }catch(e){} } });
 
     const byBank = {};
     entries.forEach(e=>{ (byBank[e.bankName] = byBank[e.bankName] || []).push(e); });
@@ -2139,11 +2145,9 @@
       lastBankMonthRows = [];
       return;
     }
+    const results = await Promise.all(keys.map(k => storageGet(k, false)));
     const entries = [];
-    for(const k of keys.sort()){
-      const r = await storageGet(k, false);
-      if(r && r.value){ try{ entries.push(JSON.parse(r.value)); }catch(e){} }
-    }
+    results.forEach(r=>{ if(r && r.value){ try{ entries.push(JSON.parse(r.value)); }catch(e){} } });
     entries.sort((a,b)=> a.date.localeCompare(b.date));
     lastBankMonthRows = entries;
 
