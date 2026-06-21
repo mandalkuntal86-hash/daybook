@@ -454,7 +454,7 @@
     h1{font-size:24px;}
   }
 </style>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 </head>
 <body>
 
@@ -1174,22 +1174,127 @@
     return lines.join('\n');
   }
 
+  function buildPdfBlob(entry, dateIso, bizName){
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+    const pageW = doc.internal.pageSize.getWidth();
+    const marginX = 40;
+    let y = 50;
+
+    const leather = [59, 35, 23];
+    const gold = [168, 123, 38];
+    const ink = [36, 27, 18];
+    const inkSoft = [107, 94, 71];
+    const good = [47, 111, 78];
+    const lineCol = [220, 207, 168];
+
+    doc.setTextColor(...gold);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.text('DAILY CASH BOOK', marginX, y);
+    y += 22;
+
+    doc.setTextColor(...leather);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(20);
+    doc.text(bizName || 'Daily Cash Book', marginX, y);
+    y += 18;
+
+    doc.setTextColor(...inkSoft);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(11);
+    doc.text(niceDate(dateIso), marginX, y);
+    y += 14;
+    doc.setDrawColor(...gold);
+    doc.setLineWidth(1.2);
+    doc.line(marginX, y, pageW - marginX, y);
+    y += 24;
+
+    function row(label, value, opts){
+      opts = opts || {};
+      doc.setFont('helvetica', opts.bold ? 'bold' : 'normal');
+      doc.setFontSize(opts.size || 11);
+      doc.setTextColor(...(opts.color || ink));
+      doc.text(label, marginX, y);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(...(opts.color || ink));
+      doc.text(value, pageW - marginX, y, { align: 'right' });
+      y += opts.gap || 20;
+    }
+    function subline(text, color){
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9.5);
+      doc.setTextColor(...(color || inkSoft));
+      doc.text(text, marginX + 12, y);
+      y += 14;
+    }
+    function sectionGap(){ y += 6; }
+    function ruleLine(){
+      doc.setDrawColor(...lineCol);
+      doc.setLineWidth(0.6);
+      doc.line(marginX, y, pageW - marginX, y);
+      y += 14;
+    }
+
+    row('Opening Balance', fmt(entry.openingBalance));
+    row('Cash Received From Home', fmt(entry.cashReceivedFromHome));
+    row('Today Cash Sale & Receipt In Cash', fmt(entry.todayCashSale));
+    ruleLine();
+    row('Total Cash', fmt(entry.totalCash), { bold: true, size: 12.5 });
+    sectionGap();
+
+    const expSum = (entry.expenses||[]).reduce((s,x)=>s+num(x.amount),0);
+    if((entry.expenses||[]).length){
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(11.5); doc.setTextColor(...leather);
+      doc.text('Expenses', marginX, y); y += 18;
+      entry.expenses.forEach(e=>{
+        row('  ' + (e.category || 'Expense'), fmt(e.amount), { size: 10.5, gap: 16 });
+        if(e.narration) subline(e.narration);
+      });
+      row('Total Expense', fmt(expSum), { bold: true, gap: 18 });
+      sectionGap();
+    }
+
+    const depTotal = (entry.deposits||[]).reduce((s,d)=>s+num(d.amount),0);
+    if(depTotal > 0){
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(11.5); doc.setTextColor(...leather);
+      doc.text('Cash Deposit To Bank', marginX, y); y += 18;
+      entry.deposits.forEach(d=>{
+        if(num(d.amount)) row('  Deposit', fmt(d.amount), { size: 10.5, gap: 16 });
+        if(d.note) subline(d.note);
+      });
+      row('Total Deposit', fmt(depTotal), { bold: true, gap: 18 });
+      sectionGap();
+    }
+
+    row('Balance Cash', fmt(entry.balanceCash));
+    row('Cash Send To Home', fmt(entry.cashSendToHome));
+    if(entry.cashSendToHomeDenomination && entry.cashSendToHomeDenomination.length){
+      const denomStr = entry.cashSendToHomeDenomination.slice().sort((a,b)=>b.note-a.note)
+        .map(d=>'Rs.' + d.note + ' x ' + d.qty + ' = ' + fmt(d.amount)).join('  |  ');
+      subline(denomStr);
+    }
+    ruleLine();
+    row('Closing Balance', fmt(entry.closingBalance), { bold: true, size: 13, color: good, gap: 24 });
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.5);
+    doc.setTextColor(...inkSoft);
+    doc.text('Generated from Daily Cash Book', marginX, y + 6);
+
+    return doc.output('blob');
+  }
+
   async function sharePdfViaWhatsApp(dateIso, bizName){
     const btn = $('whatsappDayBtn');
     const originalLabel = btn.textContent;
     btn.disabled = true;
     btn.textContent = 'Preparing PDF…';
     try{
-      const source = document.querySelector('#dayReportArea .ledger-sheet') || $('dayReportArea');
+      const res = await storageGet(entryKey(dateIso), false);
+      const entry = JSON.parse(res.value);
       const fileName = 'cash-book-' + dateIso + '.pdf';
-      const opt = {
-        margin: 8,
-        filename: fileName,
-        image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#FFFDF6' },
-        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
-      };
-      const pdfBlob = await html2pdf().set(opt).from(source).outputPdf('blob');
+      const pdfBlob = buildPdfBlob(entry, dateIso, bizName);
       const pdfFile = new File([pdfBlob], fileName, { type: 'application/pdf' });
 
       if(navigator.canShare && navigator.canShare({ files: [pdfFile] })){
@@ -1210,7 +1315,7 @@
       }
     } catch(err){
       console.error(err);
-      alert('Could not prepare the PDF. Please try again.');
+      alert('Could not prepare the PDF. ' + (err && err.message ? err.message : 'Please try again.'));
     } finally {
       btn.disabled = false;
       btn.textContent = originalLabel;
