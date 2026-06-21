@@ -249,6 +249,9 @@
   }
   .icon-btn:hover{background:#fbeae6; border-color:#e6c9c2; transform:scale(1.04);}
   .icon-btn.sm{width:30px; height:30px; font-size:15px; flex:none;}
+  .icon-btn.edit{color:var(--leather-dark);}
+  .icon-btn.edit:hover{background:#F3E9CC; border-color:var(--gold);}
+  .row-actions{display:flex; gap:6px; justify-content:center;}
 
   /* ---------- Bank module : reusable removable-row list ---------- */
   .item-list{display:flex; flex-direction:column; gap:8px; margin:12px 0 6px;}
@@ -448,7 +451,7 @@
   @media print{
     body{background:#fff;}
     body::before, body::after{display:none !important;}
-    nav.tabs, .report-toolbar, .btn-row, header .biz-input{display:none !important;}
+    nav.tabs, .report-toolbar, .btn-row, header .biz-input, .row-actions, .actions-col{display:none !important;}
     .app-shell{padding:0 0 0 0; max-width:100%; width:100%;}
     .card{box-shadow:none;}
     .panel{display:none !important;}
@@ -643,6 +646,11 @@
           <input type="text" id="accountNumber" class="label-input" placeholder="Account number">
         </div>
       </div>
+      <div class="field-row">
+        <div class="field" style="flex:2;">
+          <div class="hint" id="bankEntryLoadHint">&nbsp;</div>
+        </div>
+      </div>
 
       <div class="field-row">
         <div class="field">
@@ -709,6 +717,7 @@
       <div class="btn-row">
         <button class="btn btn-primary" id="saveBankEntryBtn" type="button">Save bank entry</button>
         <button class="btn btn-ghost" id="clearBankEntryBtn" type="button">Clear form</button>
+        <button class="btn btn-danger" id="deleteBankEntryBtn" type="button" style="display:none;">Delete this bank entry</button>
       </div>
       <div class="status-msg" id="bankEntryStatus"></div>
     </div>
@@ -1069,11 +1078,12 @@
   }
 
   const EDIT_PASSWORD = 'Buku@2016';
-  function checkEditPassword(actionLabel){
+  function checkEditPassword(actionLabel, statusFn){
+    const report = statusFn || showEntryStatus;
     const entered = prompt('Enter password to ' + actionLabel + ':');
     if(entered === null) return false; // cancelled
     if(entered !== EDIT_PASSWORD){
-      showEntryStatus('Incorrect password — ' + actionLabel + ' cancelled.', true);
+      report('Incorrect password — ' + actionLabel + ' cancelled.', true);
       return false;
     }
     return true;
@@ -1818,9 +1828,9 @@
     $(id).addEventListener('input', calculateClosingBalance);
   });
 
-  function clearBankForm(){
-    $('bankEntryDate').value = todayISO();
-    $('bankSelect').value = '';
+  let isExistingBankEntry = false;
+
+  function resetBankEntryFields(){
     $('accountNumber').value = '';
     $('bankOpeningBalance').value = 0;
     $('bankTotalCollection').value = 0;
@@ -1834,6 +1844,64 @@
     updatePayeeDisplay();
   }
 
+  function clearBankForm(){
+    $('bankEntryDate').value = todayISO();
+    $('bankSelect').value = '';
+    resetBankEntryFields();
+    $('bankEntryLoadHint').textContent = '\u00a0';
+    $('deleteBankEntryBtn').style.display = 'none';
+    isExistingBankEntry = false;
+  }
+
+  /* Load a saved bank entry (for the chosen date + bank) into the form so it can
+     be edited or deleted — mirrors loadEntryIntoForm() in the cash book module. */
+  async function loadBankEntryIntoForm(date, bankName){
+    if(!date || !bankName){
+      resetBankEntryFields();
+      $('bankEntryLoadHint').textContent = '\u00a0';
+      $('deleteBankEntryBtn').style.display = 'none';
+      isExistingBankEntry = false;
+      return false;
+    }
+    const key = 'bank:' + date + ':' + bankName;
+    const res = await storageGet(key, false);
+    if(res && res.value){
+      let v;
+      try{ v = JSON.parse(res.value); }catch(e){ v = null; }
+      if(v){
+        $('accountNumber').value = v.accountNumber || '';
+        $('bankOpeningBalance').value = v.openingBalance ?? 0;
+        $('bankTotalCollection').value = v.collection ?? 0;
+        $('bankCashDeposit').value = v.cashDeposit ?? 0;
+        $('bankDenomination').value = v.denomination || '';
+        payeesList = JSON.parse(JSON.stringify(v.payees || []));
+        updatePayeeDisplay();
+        $('contraBank').value = v.contraBank || '';
+        $('contraAmount').value = v.contraAmount ?? 0;
+        $('bankNarration').value = v.narration || '';
+        calculateClosingBalance();
+        $('bankEntryLoadHint').textContent = 'Existing bank entry for ' + bankName + ' on ' + niceDate(date) + ' loaded — editing it.';
+        $('deleteBankEntryBtn').style.display = 'inline-block';
+        isExistingBankEntry = true;
+        return true;
+      }
+    }
+    resetBankEntryFields();
+    $('bankEntryLoadHint').textContent = 'No saved entry yet for ' + bankName + ' on ' + niceDate(date) + '. Fill in the figures and click "Save bank entry".';
+    $('deleteBankEntryBtn').style.display = 'none';
+    isExistingBankEntry = false;
+    return false;
+  }
+
+  $('bankEntryDate').addEventListener('change', ()=>{
+    $('bankEntryStatus').textContent = '';
+    loadBankEntryIntoForm($('bankEntryDate').value, $('bankSelect').value);
+  });
+  $('bankSelect').addEventListener('change', ()=>{
+    $('bankEntryStatus').textContent = '';
+    loadBankEntryIntoForm($('bankEntryDate').value, $('bankSelect').value);
+  });
+
   function showBankEntryStatus(msg, isErr){
     const el = $('bankEntryStatus');
     el.textContent = msg;
@@ -1844,6 +1912,7 @@
     const date = $('bankEntryDate').value;
     const bankName = $('bankSelect').value;
     if(!date || !bankName){ showBankEntryStatus('Pick a date and select a bank first.', true); return; }
+    if(isExistingBankEntry && !checkEditPassword('edit this saved bank entry', showBankEntryStatus)) return;
     if(payeesList.length === 0 && num($('bankTotalCollection').value) === 0 && num($('contraAmount').value) === 0){
       showBankEntryStatus('Add at least one collection, payment, or transfer before saving.', true); return;
     }
@@ -1887,8 +1956,22 @@
   });
 
   $('clearBankEntryBtn').addEventListener('click', ()=>{
+    if(isExistingBankEntry && !confirm('This will clear all fields on screen (the saved bank entry stays untouched unless you click "Save bank entry" again). Continue?')) return;
     clearBankForm();
     showBankEntryStatus('Form cleared.', false);
+  });
+
+  $('deleteBankEntryBtn').addEventListener('click', async ()=>{
+    const date = $('bankEntryDate').value;
+    const bankName = $('bankSelect').value;
+    if(!date || !bankName) return;
+    if(!checkEditPassword('delete this bank entry', showBankEntryStatus)) return;
+    if(!confirm('Delete the saved bank entry for ' + bankName + ' on ' + niceDate(date) + '? This cannot be undone.')) return;
+    await storageDelete('bank:' + date + ':' + bankName, false);
+    showBankEntryStatus('Deleted bank entry for ' + bankName + ' on ' + niceDate(date) + '.', false);
+    isExistingBankEntry = false;
+    loadBankEntryIntoForm(date, bankName);
+    loadBankDayReport($('bankDayReportDate').value);
   });
 
   /* ---------------- bank day report ---------------- */
@@ -1906,7 +1989,7 @@
     const entries = [];
     for(const k of keys){
       const r = await storageGet(k, false);
-      if(r && r.value){ try{ entries.push(JSON.parse(r.value)); }catch(e){} }
+      if(r && r.value){ try{ const v = JSON.parse(r.value); v._key = k; entries.push(v); }catch(e){} }
     }
 
     const byBank = {};
@@ -1925,6 +2008,15 @@
       const rowsHtml = bankEntries.map(e=>{
         const paymentTotal = (e.payees||[]).reduce((s,p)=>s+num(p.amount),0);
         const payeeNames = (e.payees||[]).map(p=>escapeHtml(p.name)).join(', ');
+        const isContra = e._key.endsWith(':contra');
+        const actionsHtml = isContra
+          ? `<div class="row-actions">
+               <button class="icon-btn sm delete-bank-entry" type="button" data-key="${e._key}" data-date="${date}" title="Delete contra entry">×</button>
+             </div>`
+          : `<div class="row-actions">
+               <button class="icon-btn sm edit edit-bank-entry" type="button" data-date="${date}" data-bank="${escapeHtml(bank)}" title="Edit">✎</button>
+               <button class="icon-btn sm delete-bank-entry" type="button" data-key="${e._key}" data-date="${date}" title="Delete">×</button>
+             </div>`;
         return `<tr>
           <td>${fmt(e.openingBalance)}</td>
           <td>${fmt(e.collection)}</td>
@@ -1934,6 +2026,7 @@
           <td>${fmt(e.contraAmount)}</td>
           <td>${fmt(e.cashDeposit)}</td>
           <td>${fmt(e.closingBalance)}</td>
+          <td>${actionsHtml}</td>
         </tr>`;
       }).join('');
 
@@ -1945,11 +2038,11 @@
           <div style="overflow-x:auto;">
           <table class="month-table">
             <thead><tr>
-              <th>Opening</th><th>Collection</th><th>Payee(s)</th><th>Payment</th><th>Contra Bank</th><th>Contra Amt</th><th>Deposit</th><th>Closing</th>
+              <th>Opening</th><th>Collection</th><th>Payee(s)</th><th>Payment</th><th>Contra Bank</th><th>Contra Amt</th><th>Deposit</th><th>Closing</th><th class="actions-col">Actions</th>
             </tr></thead>
             <tbody>${rowsHtml}</tbody>
             <tfoot><tr class="total-row">
-              <td>—</td><td>${fmt(totals.collection)}</td><td>—</td><td>${fmt(totals.payment)}</td><td>—</td><td>${fmt(totals.contra)}</td><td>${fmt(totals.deposit)}</td><td>—</td>
+              <td>—</td><td>${fmt(totals.collection)}</td><td>—</td><td>${fmt(totals.payment)}</td><td>—</td><td>${fmt(totals.contra)}</td><td>${fmt(totals.deposit)}</td><td>—</td><td>—</td>
             </tr></tfoot>
           </table>
           </div>
@@ -1958,6 +2051,34 @@
     }
     area.innerHTML = html;
   }
+
+  /* Jump to "Bank Entry", load the chosen date+bank's saved entry, ready to edit. */
+  async function editBankEntry(date, bankName){
+    document.querySelector('.tab-btn[data-tab="bank-entry"]').click();
+    $('bankEntryDate').value = date;
+    $('bankSelect').value = bankName;
+    await loadBankEntryIntoForm(date, bankName);
+  }
+
+  /* Delete a single bank-book entry (regular or contra) directly from the day report row. */
+  async function deleteBankEntryByKey(key, date){
+    if(!checkEditPassword('delete this bank entry', (msg)=>alert(msg))) return;
+    if(!confirm('Delete this bank entry? This cannot be undone.')) return;
+    await storageDelete(key, false);
+    loadBankDayReport(date);
+  }
+
+  $('bankDayReportArea').addEventListener('click', async (e)=>{
+    const editBtn = e.target.closest('.edit-bank-entry');
+    if(editBtn){
+      await editBankEntry(editBtn.dataset.date, editBtn.dataset.bank);
+      return;
+    }
+    const delBtn = e.target.closest('.delete-bank-entry');
+    if(delBtn){
+      await deleteBankEntryByKey(delBtn.dataset.key, delBtn.dataset.date);
+    }
+  });
 
   $('loadBankDayBtn').addEventListener('click', ()=> loadBankDayReport($('bankDayReportDate').value));
   $('printBankDayBtn').addEventListener('click', ()=>{
