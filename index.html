@@ -978,8 +978,23 @@
     loadEntryIntoForm($('entryDate').value);
   });
 
+  function blankEntryForm(){
+    $('openingBalance').value = 0;
+    $('cashFromHome').value = 0;
+    $('todaySale').value = 0;
+    clearExpenseRows();
+    addExpenseRow('expense', '', '', '');
+    clearDepositRows();
+    addDepositRow('', '');
+    clearDenomGrid();
+    $('cashToHome').value = 0;
+    recalcLive();
+  }
+
   $('clearEntryBtn').addEventListener('click', ()=>{
-    loadEntryIntoForm($('entryDate').value);
+    if(isExistingEntry && !confirm('This will clear all fields on screen (the saved entry stays untouched unless you click "Save entry" again). Continue?')) return;
+    blankEntryForm();
+    $('entryLoadHint').textContent = 'Form cleared. Fill in the figures and click "Save entry" to store them' + (isExistingEntry ? ' (this will overwrite the existing saved entry for this date).' : '.');
     $('entryStatus').textContent = '';
   });
 
@@ -1017,8 +1032,9 @@
     if(result){
       showEntryStatus('Saved entry for ' + niceDate(dateIso) + '. Closing balance: ' + fmt(t.closingBalance), false);
       $('deleteEntryBtn').style.display = 'inline-block';
-      $('entryLoadHint').textContent = 'Existing entry for ' + niceDate(dateIso) + ' loaded — editing it.';
-      isExistingEntry = true;
+      isExistingEntry = false;
+      blankEntryForm();
+      $('entryLoadHint').textContent = 'Saved! Form cleared and ready for the next entry. Pick a date to load or edit a saved entry.';
     } else {
       showEntryStatus('Could not save — please try again.', true);
     }
