@@ -189,7 +189,7 @@
     text-transform:uppercase; letter-spacing:.6px; margin-bottom:7px;
     font-family:'IBM Plex Mono',monospace;
   }
-  .field input[type=date], .field input[type=month], .field input[type=number], .field input[type=text]{
+  .field input[type=date], .field input[type=month], .field input[type=number], .field input[type=text], .field select{
     width:100%; padding:10px 12px; font-size:15px;
     border:1px solid var(--paper-line); border-radius:5px;
     background:#fff; color:var(--ink);
@@ -197,7 +197,7 @@
     transition:border-color .15s ease, box-shadow .15s ease;
   }
   .field input[type=text].label-input{font-family:'Inter',sans-serif;}
-  .field input:focus{outline:none; border-color:var(--gold); box-shadow:0 0 0 3px rgba(168,123,38,.14);}
+  .field input:focus, .field select:focus{outline:none; border-color:var(--gold); box-shadow:0 0 0 3px rgba(168,123,38,.14);}
   .field input:hover{border-color:#C9BC95;}
   .hint{font-size:11.5px; color:var(--ink-soft); margin-top:6px;}
   .hint.live{color:var(--good); font-weight:600;}
@@ -248,6 +248,20 @@
     transition:background .15s ease, border-color .15s ease, transform .1s ease;
   }
   .icon-btn:hover{background:#fbeae6; border-color:#e6c9c2; transform:scale(1.04);}
+  .icon-btn.sm{width:30px; height:30px; font-size:15px; flex:none;}
+
+  /* ---------- Bank module : reusable removable-row list ---------- */
+  .item-list{display:flex; flex-direction:column; gap:8px; margin:12px 0 6px;}
+  .item-row{
+    display:flex; align-items:center; gap:12px;
+    background:#fff; border:1px solid var(--paper-line); border-left:3px solid var(--gold);
+    border-radius:6px; padding:9px 14px;
+  }
+  .item-row .item-name{flex:1; font-weight:600; color:var(--leather-dark); font-size:14px;}
+  .item-row .item-amount{font-family:'IBM Plex Mono',monospace; font-weight:600; color:var(--ink-soft); font-size:13.5px;}
+  .item-list-total{
+    text-align:right; padding:6px 14px 2px; font-family:'IBM Plex Mono',monospace; font-size:13px; font-weight:700; color:var(--leather-dark);
+  }
 
   .btn{
     font-family:'Inter',sans-serif; font-weight:600; font-size:13.5px;
@@ -476,6 +490,10 @@
     <button class="tab-btn active" data-tab="entry">New Entry</button>
     <button class="tab-btn" data-tab="day">Day Report</button>
     <button class="tab-btn" data-tab="month">Month Report</button>
+    <button class="tab-btn" data-tab="bank-setup">Bank Setup</button>
+    <button class="tab-btn" data-tab="bank-entry">Bank Entry</button>
+    <button class="tab-btn" data-tab="bank-day">Bank Day Report</button>
+    <button class="tab-btn" data-tab="bank-month">Bank Month Report</button>
   </nav>
 
   <!-- ================= NEW ENTRY ================= -->
@@ -585,6 +603,142 @@
       <button class="btn btn-ghost" id="csvMonthBtn" style="margin-bottom:1px; display:none;">Export CSV</button>
     </div>
     <div id="monthReportArea"></div>
+  </section>
+
+  <!-- ================= BANK SETUP ================= -->
+  <section class="panel" id="panel-bank-setup">
+    <div class="card">
+      <h2>Manage Banks</h2>
+      <div class="field-row">
+        <div class="field" style="flex:2;">
+          <label for="newBankName">Add new bank</label>
+          <div style="display:flex; gap:10px; align-items:flex-end;">
+            <input type="text" id="newBankName" class="label-input" placeholder="e.g. SBI Main Branch" style="flex:1;">
+            <button class="btn btn-primary" id="addNewBankBtn" type="button" style="margin-bottom:1px;">+ Add bank</button>
+          </div>
+        </div>
+      </div>
+      <div class="divider-label" style="margin-top:6px;">Banks on record</div>
+      <div id="bankListArea"></div>
+    </div>
+  </section>
+
+  <!-- ================= BANK ENTRY ================= -->
+  <section class="panel" id="panel-bank-entry">
+    <div class="card">
+      <h2>Bank Entry for</h2>
+      <div class="field-row">
+        <div class="field" style="max-width:220px;">
+          <label for="bankEntryDate">Date</label>
+          <input type="date" id="bankEntryDate">
+        </div>
+        <div class="field">
+          <label for="bankSelect">Bank Account</label>
+          <select id="bankSelect">
+            <option value="">-- Select Bank --</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="accountNumber">Account Number (optional)</label>
+          <input type="text" id="accountNumber" class="label-input" placeholder="Account number">
+        </div>
+      </div>
+
+      <div class="field-row">
+        <div class="field">
+          <label for="bankOpeningBalance">Opening Balance (₹)</label>
+          <input type="number" id="bankOpeningBalance" min="0" step="0.01" value="0">
+        </div>
+        <div class="field">
+          <label for="bankTotalCollection">Total Collection / Deposits (₹)</label>
+          <input type="number" id="bankTotalCollection" min="0" step="0.01" value="0">
+        </div>
+        <div class="field">
+          <label for="bankCashDeposit">Cash Deposit (₹)</label>
+          <input type="number" id="bankCashDeposit" min="0" step="0.01" value="0">
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="bankDenomination">Denomination (optional)</label>
+          <input type="text" id="bankDenomination" class="label-input" placeholder="e.g. 500x20, 100x50">
+        </div>
+      </div>
+
+      <div class="divider-label" style="margin-top:18px;">Payments (Payees)</div>
+      <div class="field-row">
+        <div class="field">
+          <label for="payeeName">Payee Name</label>
+          <input type="text" id="payeeName" class="label-input" placeholder="Person / entity name">
+        </div>
+        <div class="field">
+          <label for="payeeAmount">Amount (₹)</label>
+          <div style="display:flex; gap:10px; align-items:flex-end;">
+            <input type="number" id="payeeAmount" min="0" step="0.01" placeholder="0.00" style="flex:1;">
+            <button class="btn btn-ghost" id="addPayeeBtn" type="button" style="margin-bottom:1px;">+ Add payee</button>
+          </div>
+        </div>
+      </div>
+      <div id="payeeListArea"></div>
+
+      <div class="divider-label" style="margin-top:18px;">Bank To Bank Transfer (Contra)</div>
+      <div class="field-row">
+        <div class="field">
+          <label for="contraBank">Transfer To Bank</label>
+          <select id="contraBank">
+            <option value="">-- No Transfer --</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="contraAmount">Transfer Amount (₹)</label>
+          <input type="number" id="contraAmount" min="0" step="0.01" value="0">
+        </div>
+        <div class="field">
+          <label for="bankNarration">Narration (optional)</label>
+          <input type="text" id="bankNarration" class="label-input" placeholder="e.g. Inter-bank transfer">
+        </div>
+      </div>
+
+      <div class="divider-label">Closing Balance</div>
+      <div class="field-row">
+        <div class="field" style="max-width:260px;">
+          <input type="number" id="bankClosingBalance" value="0" readonly style="background:#F3EEDD; cursor:not-allowed;">
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-primary" id="saveBankEntryBtn" type="button">Save bank entry</button>
+        <button class="btn btn-ghost" id="clearBankEntryBtn" type="button">Clear form</button>
+      </div>
+      <div class="status-msg" id="bankEntryStatus"></div>
+    </div>
+  </section>
+
+  <!-- ================= BANK DAY REPORT ================= -->
+  <section class="panel" id="panel-bank-day">
+    <div class="report-toolbar">
+      <div class="field" style="max-width:220px;">
+        <label for="bankDayReportDate">Choose date</label>
+        <input type="date" id="bankDayReportDate">
+      </div>
+      <button class="btn btn-primary" id="loadBankDayBtn" style="margin-bottom:1px;">Load report</button>
+      <button class="btn btn-ghost" id="printBankDayBtn" style="margin-bottom:1px;">Print / Save PDF</button>
+    </div>
+    <div id="bankDayReportArea"></div>
+  </section>
+
+  <!-- ================= BANK MONTH REPORT ================= -->
+  <section class="panel" id="panel-bank-month">
+    <div class="report-toolbar">
+      <div class="field" style="max-width:220px;">
+        <label for="bankMonthReportMonth">Choose month</label>
+        <input type="month" id="bankMonthReportMonth">
+      </div>
+      <button class="btn btn-primary" id="loadBankMonthBtn" style="margin-bottom:1px;">Load report</button>
+      <button class="btn btn-ghost" id="printBankMonthBtn" style="margin-bottom:1px;">Print / Save PDF</button>
+      <button class="btn btn-ghost" id="csvBankMonthBtn" style="margin-bottom:1px; display:none;">Export CSV</button>
+    </div>
+    <div id="bankMonthReportArea"></div>
   </section>
 
 </div>
@@ -1556,6 +1710,350 @@
     document.body.appendChild(a); a.click(); a.remove();
   });
 
+  /* ================================================================
+     BANK MODULE — Bank Setup / Bank Entry / Bank Day & Month Reports
+     Uses the exact same Firestore-backed storage helpers as the cash
+     book above (storageGet/storageSet/storageList), so bank data
+     lives in the same database, just under "bank:" / "banks:" keys.
+  ================================================================ */
+
+  /* ---------------- bank list (Bank Setup tab) ---------------- */
+  async function getBankList(){
+    const res = await storageGet('banks:list', false);
+    return res && res.value ? JSON.parse(res.value) : [];
+  }
+
+  async function refreshBankUI(){
+    const banks = await getBankList();
+
+    $('bankListArea').innerHTML = banks.length === 0
+      ? '<div class="hint">No banks added yet — add one above to get started.</div>'
+      : '<div class="item-list">' + banks.map(b => `
+          <div class="item-row">
+            <div class="item-name">${escapeHtml(b.name)}</div>
+            <button class="icon-btn sm remove-bank" type="button" data-name="${escapeHtml(b.name)}" title="Remove bank">×</button>
+          </div>`).join('') + '</div>';
+
+    const plainOptions = '<option value="">-- Select Bank --</option>' +
+      banks.map(b => `<option value="${escapeHtml(b.name)}">${escapeHtml(b.name)}</option>`).join('');
+    const contraOptions = '<option value="">-- No Transfer --</option>' +
+      banks.map(b => `<option value="${escapeHtml(b.name)}">${escapeHtml(b.name)}</option>`).join('');
+
+    const selBank = $('bankSelect'); const curBank = selBank.value;
+    selBank.innerHTML = plainOptions; selBank.value = curBank;
+    const selContra = $('contraBank'); const curContra = selContra.value;
+    selContra.innerHTML = contraOptions; selContra.value = curContra;
+  }
+
+  $('addNewBankBtn').addEventListener('click', async ()=>{
+    const name = $('newBankName').value.trim();
+    if(!name){ alert('Enter a bank name.'); return; }
+    const banks = await getBankList();
+    if(banks.find(b => b.name.toLowerCase() === name.toLowerCase())){ alert('That bank already exists.'); return; }
+    banks.push({name, addedDate: todayISO()});
+    await storageSet('banks:list', JSON.stringify(banks), false);
+    $('newBankName').value = '';
+    refreshBankUI();
+  });
+
+  $('bankListArea').addEventListener('click', async (e)=>{
+    const btn = e.target.closest('.remove-bank');
+    if(!btn) return;
+    const name = btn.dataset.name;
+    if(!confirm('Remove "' + name + '" from the bank list? Past saved entries for this bank are kept and still appear in reports.')) return;
+    const banks = await getBankList();
+    await storageSet('banks:list', JSON.stringify(banks.filter(b => b.name !== name)), false);
+    refreshBankUI();
+  });
+
+  /* ---------------- payees (Bank Entry tab) ---------------- */
+  let payeesList = [];
+
+  function updatePayeeDisplay(){
+    const area = $('payeeListArea');
+    if(payeesList.length === 0){ area.innerHTML = ''; return; }
+    const total = payeesList.reduce((s,p)=>s+num(p.amount),0);
+    area.innerHTML = '<div class="item-list">' +
+      payeesList.map((p,i)=>`
+        <div class="item-row">
+          <div class="item-name">${escapeHtml(p.name)}</div>
+          <div class="item-amount">${fmt(p.amount)}</div>
+          <button class="icon-btn sm remove-payee" type="button" data-index="${i}" title="Remove">×</button>
+        </div>`).join('') +
+      '</div>' +
+      `<div class="item-list-total">Total payments: ${fmt(total)}</div>`;
+  }
+
+  $('addPayeeBtn').addEventListener('click', ()=>{
+    const name = $('payeeName').value.trim();
+    const amount = num($('payeeAmount').value);
+    if(!name){ alert('Enter a payee name.'); return; }
+    if(amount <= 0){ alert('Enter a valid amount.'); return; }
+    payeesList.push({name, amount});
+    $('payeeName').value = '';
+    $('payeeAmount').value = '';
+    updatePayeeDisplay();
+    calculateClosingBalance();
+  });
+
+  $('payeeListArea').addEventListener('click', (e)=>{
+    const btn = e.target.closest('.remove-payee');
+    if(!btn) return;
+    payeesList.splice(Number(btn.dataset.index), 1);
+    updatePayeeDisplay();
+    calculateClosingBalance();
+  });
+
+  /* ---------------- bank entry form ---------------- */
+  function calculateClosingBalance(){
+    const opening = num($('bankOpeningBalance').value);
+    const collection = num($('bankTotalCollection').value);
+    const paymentTotal = payeesList.reduce((s,p)=>s+num(p.amount),0);
+    const deposit = num($('bankCashDeposit').value);
+    const contra = num($('contraAmount').value);
+    const closing = opening + collection - paymentTotal - deposit - contra;
+    $('bankClosingBalance').value = closing.toFixed(2);
+  }
+  ['bankOpeningBalance','bankTotalCollection','bankCashDeposit','contraAmount'].forEach(id=>{
+    $(id).addEventListener('input', calculateClosingBalance);
+  });
+
+  function clearBankForm(){
+    $('bankEntryDate').value = todayISO();
+    $('bankSelect').value = '';
+    $('accountNumber').value = '';
+    $('bankOpeningBalance').value = 0;
+    $('bankTotalCollection').value = 0;
+    $('bankCashDeposit').value = 0;
+    $('bankDenomination').value = '';
+    $('contraBank').value = '';
+    $('contraAmount').value = 0;
+    $('bankNarration').value = '';
+    $('bankClosingBalance').value = 0;
+    payeesList = [];
+    updatePayeeDisplay();
+  }
+
+  function showBankEntryStatus(msg, isErr){
+    const el = $('bankEntryStatus');
+    el.textContent = msg;
+    el.className = 'status-msg ' + (isErr ? 'err' : 'ok');
+  }
+
+  $('saveBankEntryBtn').addEventListener('click', async ()=>{
+    const date = $('bankEntryDate').value;
+    const bankName = $('bankSelect').value;
+    if(!date || !bankName){ showBankEntryStatus('Pick a date and select a bank first.', true); return; }
+    if(payeesList.length === 0 && num($('bankTotalCollection').value) === 0 && num($('contraAmount').value) === 0){
+      showBankEntryStatus('Add at least one collection, payment, or transfer before saving.', true); return;
+    }
+
+    const entry = {
+      date, bankName,
+      accountNumber: $('accountNumber').value.trim(),
+      openingBalance: num($('bankOpeningBalance').value),
+      collection: num($('bankTotalCollection').value),
+      payees: JSON.parse(JSON.stringify(payeesList)),
+      cashDeposit: num($('bankCashDeposit').value),
+      denomination: $('bankDenomination').value.trim(),
+      contraBank: $('contraBank').value,
+      contraAmount: num($('contraAmount').value),
+      narration: $('bankNarration').value.trim(),
+      closingBalance: num($('bankClosingBalance').value),
+      savedAt: new Date().toISOString()
+    };
+
+    const result = await storageSet('bank:' + date + ':' + bankName, JSON.stringify(entry), false);
+
+    if(entry.contraBank && entry.contraAmount > 0){
+      const contraEntry = {
+        date, bankName: entry.contraBank, accountNumber: '',
+        openingBalance: 0, collection: entry.contraAmount,
+        payees: [], cashDeposit: 0, denomination: '',
+        contraBank: bankName, contraAmount: 0,
+        narration: 'Contra transfer from ' + bankName + (entry.narration ? ' — ' + entry.narration : ''),
+        closingBalance: 0, savedAt: new Date().toISOString()
+      };
+      await storageSet('bank:' + date + ':' + entry.contraBank + ':contra', JSON.stringify(contraEntry), false);
+    }
+
+    if(result){
+      showBankEntryStatus('Saved bank entry for ' + bankName + ' on ' + niceDate(date) + '.', false);
+      clearBankForm();
+      loadBankDayReport($('bankDayReportDate').value);
+    } else {
+      showBankEntryStatus('Could not save — please try again.', true);
+    }
+  });
+
+  $('clearBankEntryBtn').addEventListener('click', ()=>{
+    clearBankForm();
+    showBankEntryStatus('Form cleared.', false);
+  });
+
+  /* ---------------- bank day report ---------------- */
+  async function loadBankDayReport(date){
+    const area = $('bankDayReportArea');
+    if(!date){ area.innerHTML = ''; return; }
+    const keys = await storageList('bank:' + date, false);
+    if(!keys || keys.length === 0){
+      area.innerHTML = `<div class="card"><div class="empty-state">
+        <div class="big">No bank entries for ${niceDate(date)}</div>
+        <div>Save bank entries in "Bank Entry" for this date to see them here.</div>
+      </div></div>`;
+      return;
+    }
+    const entries = [];
+    for(const k of keys){
+      const r = await storageGet(k, false);
+      if(r && r.value){ try{ entries.push(JSON.parse(r.value)); }catch(e){} }
+    }
+
+    const byBank = {};
+    entries.forEach(e=>{ (byBank[e.bankName] = byBank[e.bankName] || []).push(e); });
+
+    let html = '';
+    for(const [bank, bankEntries] of Object.entries(byBank)){
+      const totals = bankEntries.reduce((acc,e)=>{
+        acc.collection += num(e.collection);
+        acc.payment += (e.payees||[]).reduce((s,p)=>s+num(p.amount),0);
+        acc.deposit += num(e.cashDeposit);
+        acc.contra += num(e.contraAmount);
+        return acc;
+      }, {collection:0, payment:0, deposit:0, contra:0});
+
+      const rowsHtml = bankEntries.map(e=>{
+        const paymentTotal = (e.payees||[]).reduce((s,p)=>s+num(p.amount),0);
+        const payeeNames = (e.payees||[]).map(p=>escapeHtml(p.name)).join(', ');
+        return `<tr>
+          <td>${fmt(e.openingBalance)}</td>
+          <td>${fmt(e.collection)}</td>
+          <td>${payeeNames || '—'}</td>
+          <td>${fmt(paymentTotal)}</td>
+          <td>${e.contraBank ? escapeHtml(e.contraBank) : '—'}</td>
+          <td>${fmt(e.contraAmount)}</td>
+          <td>${fmt(e.cashDeposit)}</td>
+          <td>${fmt(e.closingBalance)}</td>
+        </tr>`;
+      }).join('');
+
+      html += `
+        <div class="ledger-sheet" style="margin-bottom:18px;">
+          <div class="ledger-head">
+            <div><div class="biz">${escapeHtml(bank)}</div><div class="date-line">${niceDate(date)}</div></div>
+          </div>
+          <div style="overflow-x:auto;">
+          <table class="month-table">
+            <thead><tr>
+              <th>Opening</th><th>Collection</th><th>Payee(s)</th><th>Payment</th><th>Contra Bank</th><th>Contra Amt</th><th>Deposit</th><th>Closing</th>
+            </tr></thead>
+            <tbody>${rowsHtml}</tbody>
+            <tfoot><tr class="total-row">
+              <td>—</td><td>${fmt(totals.collection)}</td><td>—</td><td>${fmt(totals.payment)}</td><td>—</td><td>${fmt(totals.contra)}</td><td>${fmt(totals.deposit)}</td><td>—</td>
+            </tr></tfoot>
+          </table>
+          </div>
+        </div>
+      `;
+    }
+    area.innerHTML = html;
+  }
+
+  $('loadBankDayBtn').addEventListener('click', ()=> loadBankDayReport($('bankDayReportDate').value));
+  $('printBankDayBtn').addEventListener('click', ()=>{
+    document.querySelectorAll('.panel').forEach(p=>p.classList.remove('print-active'));
+    $('panel-bank-day').classList.add('print-active');
+    window.print();
+  });
+
+  /* ---------------- bank month report ---------------- */
+  let lastBankMonthRows = [];
+
+  async function loadBankMonthReport(ym){
+    const area = $('bankMonthReportArea');
+    if(!ym){ area.innerHTML=''; $('csvBankMonthBtn').style.display='none'; return; }
+    const keys = await storageList('bank:' + ym, false);
+    if(!keys || keys.length === 0){
+      area.innerHTML = `<div class="card"><div class="empty-state">
+        <div class="big">No bank entries for ${monthName(ym)}</div>
+        <div>Save some bank entries for this month to see a report here.</div>
+      </div></div>`;
+      $('csvBankMonthBtn').style.display = 'none';
+      lastBankMonthRows = [];
+      return;
+    }
+    const entries = [];
+    for(const k of keys.sort()){
+      const r = await storageGet(k, false);
+      if(r && r.value){ try{ entries.push(JSON.parse(r.value)); }catch(e){} }
+    }
+    entries.sort((a,b)=> a.date.localeCompare(b.date));
+    lastBankMonthRows = entries;
+
+    const totals = entries.reduce((acc,e)=>{
+      acc.collection += num(e.collection);
+      acc.payment += (e.payees||[]).reduce((s,p)=>s+num(p.amount),0);
+      acc.deposit += num(e.cashDeposit);
+      return acc;
+    }, {collection:0, payment:0, deposit:0});
+
+    const rowsHtml = entries.map(e=>{
+      const paymentTotal = (e.payees||[]).reduce((s,p)=>s+num(p.amount),0);
+      return `<tr>
+        <td>${niceDate(e.date)}</td>
+        <td>${escapeHtml(e.bankName)}</td>
+        <td>${fmt(e.openingBalance)}</td>
+        <td>${fmt(e.collection)}</td>
+        <td>${fmt(paymentTotal)}</td>
+        <td>${fmt(e.cashDeposit)}</td>
+        <td>${fmt(e.closingBalance)}</td>
+      </tr>`;
+    }).join('');
+
+    area.innerHTML = `
+      <div class="month-cards">
+        <div class="month-card"><div class="lab">Total Collections</div><div class="val">${fmt(totals.collection)}</div></div>
+        <div class="month-card"><div class="lab">Total Payments</div><div class="val">${fmt(totals.payment)}</div></div>
+        <div class="month-card"><div class="lab">Cash Deposits</div><div class="val">${fmt(totals.deposit)}</div></div>
+      </div>
+      <div class="ledger-sheet" style="padding:22px 22px 20px;">
+        <div class="ledger-head" style="margin-bottom:14px;">
+          <div><div class="biz">${monthName(ym)}</div><div class="date-line">${entries.length} entrie(s) recorded</div></div>
+        </div>
+        <div style="overflow-x:auto;">
+        <table class="month-table">
+          <thead><tr><th>Date</th><th>Bank</th><th>Opening</th><th>Collection</th><th>Payment</th><th>Deposit</th><th>Closing</th></tr></thead>
+          <tbody>${rowsHtml}</tbody>
+          <tfoot><tr class="total-row"><td colspan="2">Totals</td><td>—</td><td>${fmt(totals.collection)}</td><td>${fmt(totals.payment)}</td><td>${fmt(totals.deposit)}</td><td>—</td></tr></tfoot>
+        </table>
+        </div>
+      </div>
+    `;
+    $('csvBankMonthBtn').style.display = 'inline-block';
+  }
+
+  $('loadBankMonthBtn').addEventListener('click', ()=> loadBankMonthReport($('bankMonthReportMonth').value));
+  $('printBankMonthBtn').addEventListener('click', ()=>{
+    document.querySelectorAll('.panel').forEach(p=>p.classList.remove('print-active'));
+    $('panel-bank-month').classList.add('print-active');
+    window.print();
+  });
+  $('csvBankMonthBtn').addEventListener('click', ()=>{
+    if(!lastBankMonthRows.length) return;
+    const header = ['Date','Bank','AccountNumber','Opening','Collection','PayeeNames','Payment','ContraBank','ContraAmount','CashDeposit','Closing'];
+    const lines = [header.join(',')];
+    lastBankMonthRows.forEach(e=>{
+      const paymentTotal = (e.payees||[]).reduce((s,p)=>s+num(p.amount),0);
+      const payeeNames = (e.payees||[]).map(p=>p.name).join(' | ');
+      lines.push([e.date, e.bankName, e.accountNumber||'', e.openingBalance, e.collection, '"'+payeeNames+'"', paymentTotal, e.contraBank||'', e.contraAmount, e.cashDeposit, e.closingBalance].join(','));
+    });
+    const blob = new Blob([lines.join('\n')], {type:'text/csv'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'bank-book-' + $('bankMonthReportMonth').value + '.csv';
+    document.body.appendChild(a); a.click(); a.remove();
+  });
+
   /* ---------------- init ---------------- */
   (function init(){
     const t = todayISO();
@@ -1565,6 +2063,14 @@
     loadEntryIntoForm(t);
     loadDayReport(t);
     loadMonthReport(t.slice(0,7));
+
+    $('bankEntryDate').value = t;
+    $('bankDayReportDate').value = t;
+    $('bankMonthReportMonth').value = t.slice(0,7);
+    clearBankForm();
+    refreshBankUI();
+    loadBankDayReport(t);
+    loadBankMonthReport(t.slice(0,7));
   })();
 </script>
 </body>
