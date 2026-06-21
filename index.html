@@ -425,7 +425,7 @@
 </head>
 <body>
 
-<div class="app-shell">
+<div class="app-shell" id="appShell">
 
   <header class="top">
     <div class="brand-block">
@@ -550,11 +550,72 @@
 
 </div>
 
-<script>
-(function(){
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
+  import {
+    getFirestore, doc, getDoc, setDoc, deleteDoc, collection, getDocs
+  } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
 
-  /* ---------------- helpers ---------------- */
+  const firebaseConfig = {
+    apiKey: "AIzaSyBHfcyX4JJxM_lsajGvPybWgZgMhXm408c",
+    authDomain: "daybook-9217c.firebaseapp.com",
+    projectId: "daybook-9217c",
+    storageBucket: "daybook-9217c.firebasestorage.app",
+    messagingSenderId: "839203493750",
+    appId: "1:839203493750:web:5636d6fd9ba0f3dddacc57",
+    measurementId: "G-2EPPSPDG7S"
+  };
+
+  const fbApp = initializeApp(firebaseConfig);
+  const db = getFirestore(fbApp);
+
+  // No login: everyone who opens this site shares the same data space.
+  // All entries live under shop/main/data/{key} in Firestore.
+  const SHOP_ID = 'main';
+
   const $ = (id) => document.getElementById(id);
+
+  function sanitizeKey(key){
+    // Firestore doc IDs can't contain '/'; our keys never do, but guard anyway
+    return key.replace(/\//g, '_');
+  }
+
+  async function storageGet(key, shared){
+    try{
+      const ref = doc(db, 'shop', SHOP_ID, 'data', sanitizeKey(key));
+      const snap = await getDoc(ref);
+      if(!snap.exists()) return null;
+      return { key, value: snap.data().value, shared: !!shared };
+    } catch(e){ console.error('storage get failed', e); return null; }
+  }
+  async function storageSet(key, value, shared){
+    try{
+      const ref = doc(db, 'shop', SHOP_ID, 'data', sanitizeKey(key));
+      await setDoc(ref, { value, updatedAt: new Date().toISOString() });
+      return { key, value, shared: !!shared };
+    } catch(e){ console.error('storage set failed', e); return null; }
+  }
+  async function storageDelete(key, shared){
+    try{
+      const ref = doc(db, 'shop', SHOP_ID, 'data', sanitizeKey(key));
+      await deleteDoc(ref);
+      return { key, deleted:true, shared: !!shared };
+    } catch(e){ console.error('storage delete failed', e); return null; }
+  }
+  async function storageList(prefix, shared){
+    try{
+      const colRef = collection(db, 'shop', SHOP_ID, 'data');
+      const snap = await getDocs(colRef);
+      const keys = [];
+      snap.forEach(d=>{ if(!prefix || d.id.startsWith(sanitizeKey(prefix))) keys.push(d.id); });
+      return keys;
+    } catch(e){ console.error('storage list failed', e); return []; }
+  }
+
+  /* ================================================================
+     APP — mirrors the previous window.storage key scheme exactly,
+     now backed by Firestore at shop/main/data/{key}
+  ================================================================ */
   const num = (v) => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
   const fmt = (n) => '₹ ' + (n<0 ? '-' : '') + Math.abs(n).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2});
   const todayISO = () => {
@@ -571,23 +632,6 @@
     const [y,m] = ym.split('-').map(Number);
     return new Date(y, m-1, 1).toLocaleDateString('en-IN', {month:'long', year:'numeric'});
   };
-
-  async function storageGet(key, shared){
-    try { return await window.storage.get(key, shared); }
-    catch(e){ return null; }
-  }
-  async function storageSet(key, value, shared){
-    try { return await window.storage.set(key, value, shared); }
-    catch(e){ console.error('storage set failed', e); return null; }
-  }
-  async function storageDelete(key, shared){
-    try { return await window.storage.delete(key, shared); }
-    catch(e){ return null; }
-  }
-  async function storageList(prefix, shared){
-    try { const r = await window.storage.list(prefix, shared); return r ? r.keys : []; }
-    catch(e){ return []; }
-  }
 
   /* ---------------- tabs ---------------- */
   document.querySelectorAll('.tab-btn').forEach(btn=>{
@@ -1106,8 +1150,6 @@
     loadDayReport(t);
     loadMonthReport(t.slice(0,7));
   })();
-
-})();
 </script>
 </body>
 </html>
