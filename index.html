@@ -1837,6 +1837,7 @@
   });
 
   let isExistingBankEntry = false;
+  let loadedBankEntrySnapshot = null; // remembers the currently-loaded saved entry, so we can clean up its old contra link if it changes or is removed
 
   function resetBankEntryFields(){
     $('accountNumber').value = '';
@@ -1859,6 +1860,7 @@
     $('bankEntryLoadHint').textContent = '\u00a0';
     $('deleteBankEntryBtn').style.display = 'none';
     isExistingBankEntry = false;
+    loadedBankEntrySnapshot = null;
   }
 
   /* Parse a bank storage key into {date, bankName, isContra}. Date is always the
@@ -1898,6 +1900,7 @@
       $('bankEntryLoadHint').textContent = '\u00a0';
       $('deleteBankEntryBtn').style.display = 'none';
       isExistingBankEntry = false;
+      loadedBankEntrySnapshot = null;
       return false;
     }
     const key = 'bank:' + date + ':' + bankName;
@@ -1920,10 +1923,12 @@
         $('bankEntryLoadHint').textContent = 'Existing bank entry for ' + bankName + ' on ' + niceDate(date) + ' loaded — editing it.';
         $('deleteBankEntryBtn').style.display = 'inline-block';
         isExistingBankEntry = true;
+        loadedBankEntrySnapshot = v;
         return true;
       }
     }
     resetBankEntryFields();
+    loadedBankEntrySnapshot = null;
     const prev = await findPreviousBankClosing(bankName, date);
     if(prev !== null){
       $('bankOpeningBalance').value = prev.closingBalance.toFixed(2);
@@ -1976,6 +1981,15 @@
       savedAt: new Date().toISOString()
     };
 
+    // If this entry previously pointed at a different (or no) contra bank,
+    // remove the old auto-generated mirror first so it doesn't linger as a
+    // stale "phantom" record once it no longer matches this entry.
+    const prevContraBank = loadedBankEntrySnapshot ? (loadedBankEntrySnapshot.contraBank || '') : '';
+    const prevContraAmount = loadedBankEntrySnapshot ? num(loadedBankEntrySnapshot.contraAmount) : 0;
+    if(prevContraBank && prevContraAmount > 0 && (prevContraBank !== entry.contraBank || !(entry.contraAmount > 0))){
+      await storageDelete('bank:' + date + ':' + prevContraBank + ':contra', false);
+    }
+
     const result = await storageSet('bank:' + date + ':' + bankName, JSON.stringify(entry), false);
 
     if(entry.contraBank && entry.contraAmount > 0){
@@ -2011,6 +2025,10 @@
     if(!date || !bankName) return;
     if(!checkEditPassword('delete this bank entry', showBankEntryStatus)) return;
     if(!confirm('Delete the saved bank entry for ' + bankName + ' on ' + niceDate(date) + '? This cannot be undone.')) return;
+    // Also remove the auto-generated mirror on the other bank, if this entry had a contra transfer.
+    if(loadedBankEntrySnapshot && loadedBankEntrySnapshot.contraBank && num(loadedBankEntrySnapshot.contraAmount) > 0){
+      await storageDelete('bank:' + date + ':' + loadedBankEntrySnapshot.contraBank + ':contra', false);
+    }
     await storageDelete('bank:' + date + ':' + bankName, false);
     showBankEntryStatus('Deleted bank entry for ' + bankName + ' on ' + niceDate(date) + '.', false);
     isExistingBankEntry = false;
@@ -2102,10 +2120,49 @@
     await loadBankEntryIntoForm(date, bankName);
   }
 
-  /* Delete a single bank-book entry (regular or contra) directly from the day report row. */
+  /* Delete a single bank-book entry (regular or contra) directly from the day report row,
+     keeping both sides of a contra (bank-to-bank transfer) pair consistent:
+       - Deleting the regular entry that originated a transfer also removes its mirror.
+       - Deleting the mirror also clears the contra link on the entry that originated it,
+         so re-saving that entry later doesn't silently recreate the mirror. */
   async function deleteBankEntryByKey(key, date){
     if(!checkEditPassword('delete this bank entry', (msg)=>alert(msg))) return;
     if(!confirm('Delete this bank entry? This cannot be undone.')) return;
+
+    if(key.endsWith(':contra')){
+      const res = await storageGet(key, false);
+      if(res && res.value){
+        try{
+          const mirror = JSON.parse(res.value);
+          const sourceBank = mirror.contraBank;
+          if(sourceBank){
+            const sourceKey = 'bank:' + date + ':' + sourceBank;
+            const sres = await storageGet(sourceKey, false);
+            if(sres && sres.value){
+              const orig = JSON.parse(sres.value);
+              if(orig.contraBank === mirror.bankName){
+                const paymentTotal = (orig.payees||[]).reduce((s,p)=>s+num(p.amount),0);
+                orig.contraBank = '';
+                orig.contraAmount = 0;
+                orig.closingBalance = (num(orig.openingBalance) + num(orig.collection) + num(orig.cashDeposit)) - paymentTotal;
+                await storageSet(sourceKey, JSON.stringify(orig), false);
+              }
+            }
+          }
+        }catch(e){}
+      }
+    } else {
+      const res = await storageGet(key, false);
+      if(res && res.value){
+        try{
+          const v = JSON.parse(res.value);
+          if(v.contraBank && num(v.contraAmount) > 0){
+            await storageDelete('bank:' + date + ':' + v.contraBank + ':contra', false);
+          }
+        }catch(e){}
+      }
+    }
+
     await storageDelete(key, false);
     loadBankDayReport(date);
   }
