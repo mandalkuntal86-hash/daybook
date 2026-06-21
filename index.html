@@ -1853,6 +1853,35 @@
     isExistingBankEntry = false;
   }
 
+  /* Parse a bank storage key into {date, bankName, isContra}. Date is always the
+     fixed-width 10-char ISO date right after "bank:", so this is safe even if a
+     bank name itself happens to contain a colon. */
+  function parseBankKey(key){
+    if(!key.startsWith('bank:')) return null;
+    const rest = key.slice(5);
+    const date = rest.slice(0, 10);
+    let bankName = rest.slice(11);
+    let isContra = false;
+    if(bankName.endsWith(':contra')){ isContra = true; bankName = bankName.slice(0, -7); }
+    return {date, bankName, isContra};
+  }
+
+  /* Find the most recent prior saved entry for this bank (before the given date)
+     so its closing balance can pre-fill the new opening balance — mirrors
+     findPreviousClosing() in the cash book module. */
+  async function findPreviousBankClosing(bankName, beforeDateIso){
+    const keys = await storageList('bank:', false);
+    const matches = (keys || [])
+      .map(parseBankKey)
+      .filter(p => p && !p.isContra && p.bankName === bankName && p.date < beforeDateIso);
+    if(matches.length === 0) return null;
+    matches.sort((a,b)=> a.date.localeCompare(b.date));
+    const prev = matches[matches.length - 1];
+    const res = await storageGet('bank:' + prev.date + ':' + bankName, false);
+    if(!res || !res.value) return null;
+    try{ const v = JSON.parse(res.value); return {date: prev.date, closingBalance: num(v.closingBalance)}; }catch(e){ return null; }
+  }
+
   /* Load a saved bank entry (for the chosen date + bank) into the form so it can
      be edited or deleted — mirrors loadEntryIntoForm() in the cash book module. */
   async function loadBankEntryIntoForm(date, bankName){
@@ -1887,7 +1916,14 @@
       }
     }
     resetBankEntryFields();
-    $('bankEntryLoadHint').textContent = 'No saved entry yet for ' + bankName + ' on ' + niceDate(date) + '. Fill in the figures and click "Save bank entry".';
+    const prev = await findPreviousBankClosing(bankName, date);
+    if(prev !== null){
+      $('bankOpeningBalance').value = prev.closingBalance.toFixed(2);
+      calculateClosingBalance();
+      $('bankEntryLoadHint').textContent = 'No saved entry yet for ' + bankName + ' on ' + niceDate(date) + '. Opening balance pulled from ' + niceDate(prev.date) + "'s closing balance.";
+    } else {
+      $('bankEntryLoadHint').textContent = 'No saved entry yet for ' + bankName + ' on ' + niceDate(date) + '. This looks like the first entry for this bank — set an opening balance.';
+    }
     $('deleteBankEntryBtn').style.display = 'none';
     isExistingBankEntry = false;
     return false;
