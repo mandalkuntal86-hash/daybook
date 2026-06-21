@@ -815,6 +815,18 @@
     try{ const v = JSON.parse(res.value); return {date: prevDate, closingBalance: v.closingBalance}; }catch(e){ return null; }
   }
 
+  const EDIT_PASSWORD = 'Buku@2016';
+  function checkEditPassword(actionLabel){
+    const entered = prompt('Enter password to ' + actionLabel + ':');
+    if(entered === null) return false; // cancelled
+    if(entered !== EDIT_PASSWORD){
+      showEntryStatus('Incorrect password — ' + actionLabel + ' cancelled.', true);
+      return false;
+    }
+    return true;
+  }
+  let isExistingEntry = false;
+
   async function loadEntryIntoForm(dateIso){
     const res = await storageGet(entryKey(dateIso), false);
     clearExpenseRows();
@@ -840,6 +852,7 @@
         }
         $('entryLoadHint').textContent = 'Existing entry for ' + niceDate(dateIso) + ' loaded — editing it.';
         $('deleteEntryBtn').style.display = 'inline-block';
+        isExistingEntry = true;
         recalcLive();
         return true;
       }
@@ -856,6 +869,7 @@
       ? 'No entry yet for ' + niceDate(dateIso) + '. Opening balance pulled from ' + niceDate(prev.date) + "'s closing balance."
       : 'No entry yet for ' + niceDate(dateIso) + '. This looks like your first entry — set an opening balance.';
     $('deleteEntryBtn').style.display = 'none';
+    isExistingEntry = false;
     recalcLive();
     return false;
   }
@@ -873,6 +887,7 @@
   $('saveEntryBtn').addEventListener('click', async ()=>{
     const dateIso = $('entryDate').value;
     if(!dateIso){ showEntryStatus('Pick a date first.', true); return; }
+    if(isExistingEntry && !checkEditPassword('edit this saved entry')) return;
     const opening = num($('openingBalance').value);
     const fromHome = num($('cashFromHome').value);
     const sale = num($('todaySale').value);
@@ -903,6 +918,7 @@
       showEntryStatus('Saved entry for ' + niceDate(dateIso) + '. Closing balance: ' + fmt(t.closingBalance), false);
       $('deleteEntryBtn').style.display = 'inline-block';
       $('entryLoadHint').textContent = 'Existing entry for ' + niceDate(dateIso) + ' loaded — editing it.';
+      isExistingEntry = true;
     } else {
       showEntryStatus('Could not save — please try again.', true);
     }
@@ -910,9 +926,11 @@
 
   $('deleteEntryBtn').addEventListener('click', async ()=>{
     const dateIso = $('entryDate').value;
+    if(!checkEditPassword('delete this entry')) return;
     if(!confirm('Delete the saved entry for ' + niceDate(dateIso) + '? This cannot be undone.')) return;
     await storageDelete(entryKey(dateIso), false);
     showEntryStatus('Deleted entry for ' + niceDate(dateIso) + '.', false);
+    isExistingEntry = false;
     loadEntryIntoForm(dateIso);
   });
 
