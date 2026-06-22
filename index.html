@@ -1990,13 +1990,19 @@
     const result = await storageSet('bank:' + date + ':' + bankName, JSON.stringify(entry), false);
 
     if(entry.contraBank && entry.contraAmount > 0){
+      // The mirror entry represents the receiving bank's side of the transfer, so it
+      // needs its own real opening balance (carried from that bank's last saved
+      // closing balance) rather than a hardcoded 0 — otherwise the receiving bank's
+      // opening/closing figures in reports come out wrong on transfer days.
+      const recvPrev = await findPreviousBankClosing(entry.contraBank, date);
+      const recvOpening = recvPrev !== null ? recvPrev.closingBalance : 0;
       const contraEntry = {
         date, bankName: entry.contraBank, accountNumber: '',
-        openingBalance: 0, collection: entry.contraAmount,
+        openingBalance: recvOpening, collection: entry.contraAmount,
         payees: [], cashDeposit: 0, denomination: '',
         contraBank: bankName, contraAmount: 0,
         narration: 'Contra transfer from ' + bankName + (entry.narration ? ' — ' + entry.narration : ''),
-        closingBalance: 0, savedAt: new Date().toISOString()
+        closingBalance: recvOpening + entry.contraAmount, savedAt: new Date().toISOString()
       };
       await storageSet('bank:' + date + ':' + entry.contraBank + ':contra', JSON.stringify(contraEntry), false);
     }
