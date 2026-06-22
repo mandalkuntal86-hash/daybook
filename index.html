@@ -1714,12 +1714,6 @@
 
     area.innerHTML = `
       <div class="month-cards">
-        <div class="month-card"><div class="lab">Opening (1st entry)</div><div class="val">${fmt(firstOpening)}</div></div>
-        <div class="month-card"><div class="lab">Total Sales + Receipts</div><div class="val">${fmt(totals.sale + totals.received)}</div></div>
-        <div class="month-card"><div class="lab">Total Expenses</div><div class="val">${fmt(totals.expense)}</div></div>
-        <div class="month-card"><div class="lab">Deposited To Bank</div><div class="val">${fmt(totals.deposit)}</div></div>
-        <div class="month-card"><div class="lab">Sent To Home</div><div class="val">${fmt(totals.sentHome)}</div></div>
-        <div class="month-card"><div class="lab">Closing (last entry)</div><div class="val">${fmt(lastClosing)}</div></div>
         <div class="month-card" style="border-top-color:var(--rule);">
           <div class="lab">Home Cash Balance</div>
           <div style="font-size:10px;color:var(--ink-soft);font-family:'IBM Plex Mono',monospace;margin-top:2px;">${homeOpeningDate ? 'Since ' + niceDate(homeOpeningDate) : 'Set opening in Setup'}</div>
