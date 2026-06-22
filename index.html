@@ -652,6 +652,13 @@
         </div>
       </div>
 
+      <div class="field-row" id="incomingContraRow" style="display:none;">
+        <div class="field">
+          <label for="incomingContraDisplay">Received Via Transfer (Contra) (₹) — auto-recorded, not part of Collection</label>
+          <input type="text" id="incomingContraDisplay" readonly style="background:#F3EEDD; cursor:not-allowed;">
+        </div>
+      </div>
+
       <div class="field-row">
         <div class="field">
           <label for="bankOpeningBalance">Opening Balance (₹)</label>
@@ -1829,7 +1836,7 @@
     const paymentTotal = payeesList.reduce((s,p)=>s+num(p.amount),0);
     const deposit = num($('bankCashDeposit').value);
     const contra = num($('contraAmount').value);
-    const closing = (opening + collection + deposit) - (paymentTotal + contra);
+    const closing = (opening + collection + deposit + incomingContraAmount) - (paymentTotal + contra);
     $('bankClosingBalance').value = closing.toFixed(2);
   }
   ['bankOpeningBalance','bankTotalCollection','bankCashDeposit','contraAmount'].forEach(id=>{
@@ -1838,6 +1845,21 @@
 
   let isExistingBankEntry = false;
   let loadedBankEntrySnapshot = null; // remembers the currently-loaded saved entry, so we can clean up its old contra link if it changes or is removed
+  let incomingContraAmount = 0; // money this bank already received today via someone else's contra transfer — tracked separately from genuine Collection, but still counted in Closing Balance
+  let incomingContraSource = '';
+
+  function setIncomingContraDisplay(amount, sourceBank){
+    incomingContraAmount = amount || 0;
+    incomingContraSource = sourceBank || '';
+    const row = $('incomingContraRow');
+    if(incomingContraAmount > 0){
+      $('incomingContraDisplay').value = fmt(incomingContraAmount) + (incomingContraSource ? ' from ' + incomingContraSource : '');
+      row.style.display = '';
+    } else {
+      $('incomingContraDisplay').value = '';
+      row.style.display = 'none';
+    }
+  }
 
   function resetBankEntryFields(){
     $('accountNumber').value = '';
@@ -1851,6 +1873,7 @@
     $('bankClosingBalance').value = 0;
     payeesList = [];
     updatePayeeDisplay();
+    setIncomingContraDisplay(0, '');
   }
 
   function clearBankForm(){
@@ -1878,18 +1901,31 @@
 
   /* Find the most recent prior saved entry for this bank (before the given date)
      so its closing balance can pre-fill the new opening balance — mirrors
-     findPreviousClosing() in the cash book module. */
+     findPreviousClosing() in the cash book module.
+     Considers BOTH regular entries and auto-generated contra (incoming-transfer)
+     mirrors when picking the most recent date — a day where a bank only
+     received an incoming transfer (no manual entry yet) still has a real,
+     correct closing balance that the next day's opening should carry forward.
+     If a date has both, the regular entry's closing is used (it already folds
+     in any same-day contra via the Closing Balance calculation), falling back
+     to the contra mirror's own closing if no regular entry exists for that date. */
   async function findPreviousBankClosing(bankName, beforeDateIso){
     const keys = await storageList('bank:', false);
     const matches = (keys || [])
       .map(parseBankKey)
-      .filter(p => p && !p.isContra && p.bankName === bankName && p.date < beforeDateIso);
+      .filter(p => p && p.bankName === bankName && p.date < beforeDateIso);
     if(matches.length === 0) return null;
-    matches.sort((a,b)=> a.date.localeCompare(b.date));
-    const prev = matches[matches.length - 1];
-    const res = await storageGet('bank:' + prev.date + ':' + bankName, false);
-    if(!res || !res.value) return null;
-    try{ const v = JSON.parse(res.value); return {date: prev.date, closingBalance: num(v.closingBalance)}; }catch(e){ return null; }
+    const mostRecentDate = matches.reduce((max, p) => p.date > max ? p.date : max, matches[0].date);
+    const regularKey = 'bank:' + mostRecentDate + ':' + bankName;
+    const res = await storageGet(regularKey, false);
+    if(res && res.value){
+      try{ const v = JSON.parse(res.value); return {date: mostRecentDate, closingBalance: num(v.closingBalance)}; }catch(e){}
+    }
+    const contraRes = await storageGet(regularKey + ':contra', false);
+    if(contraRes && contraRes.value){
+      try{ const v = JSON.parse(contraRes.value); return {date: mostRecentDate, closingBalance: num(v.closingBalance)}; }catch(e){}
+    }
+    return null;
   }
 
   /* Load a saved bank entry (for the chosen date + bank) into the form so it can
@@ -1904,7 +1940,18 @@
       return false;
     }
     const key = 'bank:' + date + ':' + bankName;
-    const res = await storageGet(key, false);
+    const contraKey = key + ':contra';
+    // Also look for an auto-generated incoming-transfer mirror on this same
+    // date+bank — it lives under a separate ":contra" key, so the normal
+    // lookup above would otherwise miss money that's already arrived today.
+    // It stays a separate record (it's genuinely a transfer, not a Collection),
+    // but its amount still needs to be visible and counted in Closing Balance.
+    const [res, contraRes] = await Promise.all([storageGet(key, false), storageGet(contraKey, false)]);
+    let contraV = null;
+    if(contraRes && contraRes.value){ try{ contraV = JSON.parse(contraRes.value); }catch(e){ contraV = null; } }
+    const incoming = contraV ? num(contraV.collection) : 0;
+    const incomingSource = contraV ? (contraV.contraBank || '') : '';
+
     if(res && res.value){
       let v;
       try{ v = JSON.parse(res.value); }catch(e){ v = null; }
@@ -1919,6 +1966,7 @@
         $('contraBank').value = v.contraBank || '';
         $('contraAmount').value = v.contraAmount ?? 0;
         $('bankNarration').value = v.narration || '';
+        setIncomingContraDisplay(incoming, incomingSource);
         calculateClosingBalance();
         $('bankEntryLoadHint').textContent = 'Existing bank entry for ' + bankName + ' on ' + niceDate(date) + ' loaded — editing it.';
         $('deleteBankEntryBtn').style.display = 'inline-block';
@@ -1927,12 +1975,17 @@
         return true;
       }
     }
+
     resetBankEntryFields();
     loadedBankEntrySnapshot = null;
     const prev = await findPreviousBankClosing(bankName, date);
-    if(prev !== null){
-      $('bankOpeningBalance').value = prev.closingBalance.toFixed(2);
-      calculateClosingBalance();
+    $('bankOpeningBalance').value = (prev !== null ? prev.closingBalance : 0).toFixed(2);
+    setIncomingContraDisplay(incoming, incomingSource);
+    calculateClosingBalance();
+
+    if(contraV){
+      $('bankEntryLoadHint').textContent = bankName + ' has no Collection entries of its own yet for ' + niceDate(date) + ', but already received ' + fmt(incoming) + ' via an incoming transfer (shown separately below, already included in Closing Balance). Add this bank\'s own collections or payments, then save.';
+    } else if(prev !== null){
       $('bankEntryLoadHint').textContent = 'No saved entry yet for ' + bankName + ' on ' + niceDate(date) + '. Opening balance pulled from ' + niceDate(prev.date) + "'s closing balance.";
     } else {
       $('bankEntryLoadHint').textContent = 'No saved entry yet for ' + bankName + ' on ' + niceDate(date) + '. This looks like the first entry for this bank — set an opening balance.';
