@@ -2054,6 +2054,7 @@
         openingBalance: recvOpening, collection: entry.contraAmount,
         payees: [], cashDeposit: 0, denomination: '',
         contraBank: bankName, contraAmount: 0,
+        isMirror: true,
         narration: 'Contra transfer from ' + bankName + (entry.narration ? ' — ' + entry.narration : ''),
         closingBalance: recvOpening + entry.contraAmount, savedAt: new Date().toISOString()
       };
@@ -2114,17 +2115,19 @@
     let html = '';
     for(const [bank, bankEntries] of Object.entries(byBank)){
       const totals = bankEntries.reduce((acc,e)=>{
-        acc.collection += num(e.collection);
+        const isContraEntry = !!e.isMirror;
+        acc.collection += isContraEntry ? 0 : num(e.collection);
         acc.payment += (e.payees||[]).reduce((s,p)=>s+num(p.amount),0);
         acc.deposit += num(e.cashDeposit);
-        acc.contra += num(e.contraAmount);
+        // Mirror entries store the transfer amount in `collection`; regular entries in `contraAmount`
+        acc.contra += isContraEntry ? num(e.collection) : num(e.contraAmount);
         return acc;
       }, {collection:0, payment:0, deposit:0, contra:0});
 
       const rowsHtml = bankEntries.map(e=>{
         const paymentTotal = (e.payees||[]).reduce((s,p)=>s+num(p.amount),0);
         const payeeNames = (e.payees||[]).map(p=>escapeHtml(p.name)).join(', ');
-        const isContra = e._key.endsWith(':contra');
+        const isContra = !!e.isMirror;
         const actionsHtml = isContra
           ? `<div class="row-actions">
                <button class="icon-btn sm delete-bank-entry" type="button" data-key="${e._key}" data-date="${date}" title="Delete contra entry">×</button>
@@ -2133,13 +2136,16 @@
                <button class="icon-btn sm edit edit-bank-entry" type="button" data-date="${date}" data-bank="${escapeHtml(bank)}" title="Edit">✎</button>
                <button class="icon-btn sm delete-bank-entry" type="button" data-key="${e._key}" data-date="${date}" title="Delete">×</button>
              </div>`;
+        // For mirror entries (isMirror:true), the transfer amount is in `collection`.
+        const contraAmtDisplay = isContra ? fmt(e.collection) : fmt(e.contraAmount);
+        const collectionDisplay = isContra ? fmt(0) : fmt(e.collection);
         return `<tr>
           <td>${fmt(e.openingBalance)}</td>
-          <td>${fmt(e.collection)}</td>
+          <td>${collectionDisplay}</td>
           <td>${payeeNames || '—'}</td>
           <td>${fmt(paymentTotal)}</td>
           <td>${e.contraBank ? escapeHtml(e.contraBank) : '—'}</td>
-          <td>${fmt(e.contraAmount)}</td>
+          <td>${contraAmtDisplay}</td>
           <td>${fmt(e.cashDeposit)}</td>
           <td>${fmt(e.closingBalance)}</td>
           <td>${actionsHtml}</td>
@@ -2260,25 +2266,33 @@
     }
     const results = await Promise.all(keys.map(k => storageGet(k, false)));
     const entries = [];
-    results.forEach(r=>{ if(r && r.value){ try{ entries.push(JSON.parse(r.value)); }catch(e){} } });
+    results.forEach((r,i)=>{ if(r && r.value){ try{ const v = JSON.parse(r.value); v._key = keys[i]; entries.push(v); }catch(e){} } });
     entries.sort((a,b)=> a.date.localeCompare(b.date));
     lastBankMonthRows = entries;
 
     const totals = entries.reduce((acc,e)=>{
-      acc.collection += num(e.collection);
+      const isContraEntry = !!e.isMirror;
+      acc.collection += isContraEntry ? 0 : num(e.collection);
       acc.payment += (e.payees||[]).reduce((s,p)=>s+num(p.amount),0);
+      // Mirror entries store the transfer amount in `collection`; regular entries in `contraAmount`
+      acc.contra += isContraEntry ? num(e.collection) : num(e.contraAmount);
       acc.deposit += num(e.cashDeposit);
       return acc;
-    }, {collection:0, payment:0, deposit:0});
+    }, {collection:0, payment:0, contra:0, deposit:0});
 
     const rowsHtml = entries.map(e=>{
+      const isContraEntry = !!e.isMirror;
       const paymentTotal = (e.payees||[]).reduce((s,p)=>s+num(p.amount),0);
+      const contraAmtDisplay = isContraEntry ? fmt(e.collection) : fmt(e.contraAmount);
+      const collectionDisplay = isContraEntry ? fmt(0) : fmt(e.collection);
       return `<tr>
         <td>${niceDate(e.date)}</td>
         <td>${escapeHtml(e.bankName)}</td>
         <td>${fmt(e.openingBalance)}</td>
-        <td>${fmt(e.collection)}</td>
+        <td>${collectionDisplay}</td>
         <td>${fmt(paymentTotal)}</td>
+        <td>${escapeHtml(e.contraBank||'—')}</td>
+        <td>${contraAmtDisplay}</td>
         <td>${fmt(e.cashDeposit)}</td>
         <td>${fmt(e.closingBalance)}</td>
       </tr>`;
@@ -2288,6 +2302,7 @@
       <div class="month-cards">
         <div class="month-card"><div class="lab">Total Collections</div><div class="val">${fmt(totals.collection)}</div></div>
         <div class="month-card"><div class="lab">Total Payments</div><div class="val">${fmt(totals.payment)}</div></div>
+        <div class="month-card"><div class="lab">Total Contra</div><div class="val">${fmt(totals.contra)}</div></div>
         <div class="month-card"><div class="lab">Cash Deposits</div><div class="val">${fmt(totals.deposit)}</div></div>
       </div>
       <div class="ledger-sheet" style="padding:22px 22px 20px;">
@@ -2296,9 +2311,9 @@
         </div>
         <div style="overflow-x:auto;">
         <table class="month-table">
-          <thead><tr><th>Date</th><th>Bank</th><th>Opening</th><th>Collection</th><th>Payment</th><th>Deposit</th><th>Closing</th></tr></thead>
+          <thead><tr><th>Date</th><th>Bank</th><th>Opening</th><th>Collection</th><th>Payment</th><th>Contra Bank</th><th>Contra Amt</th><th>Deposit</th><th>Closing</th></tr></thead>
           <tbody>${rowsHtml}</tbody>
-          <tfoot><tr class="total-row"><td colspan="2">Totals</td><td>—</td><td>${fmt(totals.collection)}</td><td>${fmt(totals.payment)}</td><td>${fmt(totals.deposit)}</td><td>—</td></tr></tfoot>
+          <tfoot><tr class="total-row"><td colspan="2">Totals</td><td>—</td><td>${fmt(totals.collection)}</td><td>${fmt(totals.payment)}</td><td>—</td><td>${fmt(totals.contra)}</td><td>${fmt(totals.deposit)}</td><td>—</td></tr></tfoot>
         </table>
         </div>
       </div>
