@@ -634,6 +634,23 @@
       <div class="divider-label" style="margin-top:6px;">Banks on record</div>
       <div id="bankListArea"></div>
     </div>
+    <div class="card" style="margin-top:18px;">
+      <h2>Home Cash Settings</h2>
+      <div class="field-row">
+        <div class="field" style="max-width:280px;">
+          <label for="homeOpeningBalance">Home Cash Opening Balance (₹)</label>
+          <input type="number" id="homeOpeningBalance" min="0" step="0.01" value="0" placeholder="e.g. 299000">
+        </div>
+        <div class="field" style="max-width:200px;">
+          <label for="homeOpeningDate">As of Date</label>
+          <input type="date" id="homeOpeningDate">
+        </div>
+        <div class="field" style="flex:none; display:flex; align-items:flex-end;">
+          <button class="btn btn-primary" id="saveHomeOpeningBtn" type="button">Save</button>
+        </div>
+      </div>
+      <div id="homeOpeningStatus" style="font-size:12px;color:var(--good);margin-top:6px;font-family:'IBM Plex Mono',monospace;"></div>
+    </div>
   </section>
 
   <!-- ================= BANK ENTRY ================= -->
@@ -1682,33 +1699,20 @@
       </div>`;
     }).join('');
 
-    // Build per-bank latest closing balance (last entry date for each bank, non-mirror)
-    const bankClosing = {};
-    entries.forEach(e=>{
-      const isM = (!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0));
-      if(!isM){
-        if(!bankClosing[e.bankName] || e.date > bankClosing[e.bankName].date){
-          bankClosing[e.bankName] = { date: e.date, closing: num(e.closingBalance) };
-        }
-      }
-    });
-    const bankBalanceCards = Object.entries(bankClosing).map(([name, info])=>`
-      <div class="month-card" style="border-top-color:var(--ledger);">
-        <div class="lab">${escapeHtml(name)}</div>
-        <div style="font-size:10px;color:var(--ink-soft);font-family:'IBM Plex Mono',monospace;margin-top:2px;">${niceDate(info.date)}</div>
-        <div class="val" style="color:var(--ledger);font-size:17px;">${fmt(info.closing)}</div>
-      </div>`).join('');
-    const totalBankBalance = Object.values(bankClosing).reduce((s,v)=>s+v.closing, 0);
+    // Home cash: opening balance (set in Setup) + all sent-to-home - all received-from-home
+    let homeOpeningBalance = 0;
+    let homeOpeningDate = '';
+    const homeRes = await storageGet('settings:homeOpening', false);
+    if(homeRes && homeRes.value){
+      try{ const hv = JSON.parse(homeRes.value); homeOpeningBalance = num(hv.balance); homeOpeningDate = hv.date || ''; }catch(e){}
+    }
+    // Only count cash entries on or after the opening date
+    const homeCashNet = homeOpeningBalance + entries.reduce((s,e)=>{
+      if(homeOpeningDate && e.date < homeOpeningDate) return s;
+      return s + num(e.cashSendToHome) - num(e.cashReceivedFromHome);
+    }, 0);
 
     area.innerHTML = `
-      <div style="margin-bottom:10px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--ledger);">Bank Closing Balances</div>
-      <div class="month-cards" style="margin-bottom:8px;">${bankBalanceCards}
-        <div class="month-card" style="border-top-color:var(--leather-dark);background:var(--ink);color:#fff;">
-          <div class="lab" style="color:rgba(255,255,255,.65);">Total Balance</div>
-          <div class="val" style="color:#fff;font-size:17px;">${fmt(totalBankBalance)}</div>
-        </div>
-      </div>
-      <hr style="border:none;border-top:1px solid var(--paper-line);margin:18px 0;">
       <div class="month-cards">
         <div class="month-card"><div class="lab">Opening (1st entry)</div><div class="val">${fmt(firstOpening)}</div></div>
         <div class="month-card"><div class="lab">Total Sales + Receipts</div><div class="val">${fmt(totals.sale + totals.received)}</div></div>
@@ -1716,6 +1720,11 @@
         <div class="month-card"><div class="lab">Deposited To Bank</div><div class="val">${fmt(totals.deposit)}</div></div>
         <div class="month-card"><div class="lab">Sent To Home</div><div class="val">${fmt(totals.sentHome)}</div></div>
         <div class="month-card"><div class="lab">Closing (last entry)</div><div class="val">${fmt(lastClosing)}</div></div>
+        <div class="month-card" style="border-top-color:var(--rule);">
+          <div class="lab">Home Cash Balance</div>
+          <div style="font-size:10px;color:var(--ink-soft);font-family:'IBM Plex Mono',monospace;margin-top:2px;">${homeOpeningDate ? 'Since ' + niceDate(homeOpeningDate) : 'Set opening in Setup'}</div>
+          <div class="val" style="color:var(--rule);">${fmt(homeCashNet)}</div>
+        </div>
       </div>
       <div class="ledger-sheet" style="padding:22px 22px 20px;">
         <div class="ledger-head" style="margin-bottom:14px;">
@@ -1825,6 +1834,27 @@
     const banks = await getBankList();
     await storageSet('banks:list', JSON.stringify(banks.filter(b => b.name !== name)), false);
     refreshBankUI();
+  });
+
+  /* ---------------- home opening balance (Setup tab) ---------------- */
+  (async function loadHomeOpeningBalance(){
+    const res = await storageGet('settings:homeOpening', false);
+    if(res && res.value){
+      try{
+        const v = JSON.parse(res.value);
+        $('homeOpeningBalance').value = v.balance ?? 0;
+        $('homeOpeningDate').value = v.date || '';
+      }catch(e){}
+    }
+  })();
+
+  $('saveHomeOpeningBtn').addEventListener('click', async ()=>{
+    const balance = num($('homeOpeningBalance').value);
+    const date = $('homeOpeningDate').value;
+    if(!date){ $('homeOpeningStatus').textContent = 'Please select a date.'; return; }
+    await storageSet('settings:homeOpening', JSON.stringify({balance, date}), false);
+    $('homeOpeningStatus').textContent = 'Saved! Opening home cash ₹' + balance.toLocaleString('en-IN') + ' as of ' + date;
+    setTimeout(()=>{ $('homeOpeningStatus').textContent=''; }, 3000);
   });
 
   /* ---------------- payees (Bank Entry tab) ---------------- */
@@ -2334,33 +2364,20 @@
       </tr>`;
     }).join('');
 
-    // Build per-bank latest closing balance (last entry date for each bank, non-mirror)
-    const bankClosing = {};
-    entries.forEach(e=>{
-      const isM = (!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0));
-      if(!isM){
-        if(!bankClosing[e.bankName] || e.date > bankClosing[e.bankName].date){
-          bankClosing[e.bankName] = { date: e.date, closing: num(e.closingBalance) };
-        }
-      }
-    });
-    const bankBalanceCards = Object.entries(bankClosing).map(([name, info])=>`
-      <div class="month-card" style="border-top-color:var(--ledger);">
-        <div class="lab">${escapeHtml(name)}</div>
-        <div style="font-size:10px;color:var(--ink-soft);font-family:'IBM Plex Mono',monospace;margin-top:2px;">${niceDate(info.date)}</div>
-        <div class="val" style="color:var(--ledger);font-size:17px;">${fmt(info.closing)}</div>
-      </div>`).join('');
-    const totalBankBalance = Object.values(bankClosing).reduce((s,v)=>s+v.closing, 0);
+    // Home cash: opening balance (set in Setup) + all sent-to-home - all received-from-home
+    let homeOpeningBalance = 0;
+    let homeOpeningDate = '';
+    const homeRes = await storageGet('settings:homeOpening', false);
+    if(homeRes && homeRes.value){
+      try{ const hv = JSON.parse(homeRes.value); homeOpeningBalance = num(hv.balance); homeOpeningDate = hv.date || ''; }catch(e){}
+    }
+    // Only count cash entries on or after the opening date
+    const homeCashNet = homeOpeningBalance + entries.reduce((s,e)=>{
+      if(homeOpeningDate && e.date < homeOpeningDate) return s;
+      return s + num(e.cashSendToHome) - num(e.cashReceivedFromHome);
+    }, 0);
 
     area.innerHTML = `
-      <div style="margin-bottom:10px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--ledger);">Bank Closing Balances</div>
-      <div class="month-cards" style="margin-bottom:8px;">${bankBalanceCards}
-        <div class="month-card" style="border-top-color:var(--leather-dark);background:var(--ink);color:#fff;">
-          <div class="lab" style="color:rgba(255,255,255,.65);">Total Balance</div>
-          <div class="val" style="color:#fff;font-size:17px;">${fmt(totalBankBalance)}</div>
-        </div>
-      </div>
-      <hr style="border:none;border-top:1px solid var(--paper-line);margin:18px 0;">
       <div class="month-cards">
         <div class="month-card"><div class="lab">Total Collections</div><div class="val">${fmt(totals.collection)}</div></div>
         <div class="month-card"><div class="lab">Total Payments</div><div class="val">${fmt(totals.payment)}</div></div>
