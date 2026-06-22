@@ -1714,6 +1714,11 @@
 
     area.innerHTML = `
       <div class="month-cards">
+        <div class="month-card" style="border-top-color:var(--ledger);">
+          <div class="lab">Current Cash Balance</div>
+          <div style="font-size:10px;color:var(--ink-soft);font-family:'IBM Plex Mono',monospace;margin-top:2px;">As of ${niceDate(entries[entries.length-1].date)}</div>
+          <div class="val" style="color:var(--ledger);">${fmt(lastClosing)}</div>
+        </div>
         <div class="month-card" style="border-top-color:var(--rule);">
           <div class="lab">Home Cash Balance</div>
           <div style="font-size:10px;color:var(--ink-soft);font-family:'IBM Plex Mono',monospace;margin-top:2px;">${homeOpeningDate ? 'Since ' + niceDate(homeOpeningDate) : 'Set opening in Setup'}</div>
@@ -2358,20 +2363,33 @@
       </tr>`;
     }).join('');
 
-    // Home cash: opening balance (set in Setup) + all sent-to-home - all received-from-home
-    let homeOpeningBalance = 0;
-    let homeOpeningDate = '';
-    const homeRes = await storageGet('settings:homeOpening', false);
-    if(homeRes && homeRes.value){
-      try{ const hv = JSON.parse(homeRes.value); homeOpeningBalance = num(hv.balance); homeOpeningDate = hv.date || ''; }catch(e){}
-    }
-    // Only count cash entries on or after the opening date
-    const homeCashNet = homeOpeningBalance + entries.reduce((s,e)=>{
-      if(homeOpeningDate && e.date < homeOpeningDate) return s;
-      return s + num(e.cashSendToHome) - num(e.cashReceivedFromHome);
-    }, 0);
+    // Per-bank latest closing balance (last non-mirror entry per bank)
+    const bankClosing = {};
+    entries.forEach(e=>{
+      const isM = (!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0));
+      if(!isM){
+        if(!bankClosing[e.bankName] || e.date > bankClosing[e.bankName].date){
+          bankClosing[e.bankName] = { date: e.date, closing: num(e.closingBalance) };
+        }
+      }
+    });
+    const totalBankBalance = Object.values(bankClosing).reduce((s,v)=>s+v.closing, 0);
+    const bankBalanceCards = Object.entries(bankClosing).map(([name, info])=>`
+      <div class="month-card" style="border-top-color:var(--ledger);">
+        <div class="lab">${escapeHtml(name)}</div>
+        <div style="font-size:10px;color:var(--ink-soft);font-family:'IBM Plex Mono',monospace;margin-top:2px;">As of ${niceDate(info.date)}</div>
+        <div class="val" style="color:var(--ledger);font-size:17px;">${fmt(info.closing)}</div>
+      </div>`).join('');
 
     area.innerHTML = `
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--ledger);margin-bottom:8px;">Current Bank Balances</div>
+      <div class="month-cards" style="margin-bottom:6px;">${bankBalanceCards}
+        <div class="month-card" style="border-top-color:var(--leather-dark);background:var(--ink);">
+          <div class="lab" style="color:rgba(255,255,255,.65);">Total Bank Balance</div>
+          <div class="val" style="color:#fff;font-size:17px;">${fmt(totalBankBalance)}</div>
+        </div>
+      </div>
+      <hr style="border:none;border-top:1px solid var(--paper-line);margin:16px 0 18px;">
       <div class="month-cards">
         <div class="month-card"><div class="lab">Total Collections</div><div class="val">${fmt(totals.collection)}</div></div>
         <div class="month-card"><div class="lab">Total Payments</div><div class="val">${fmt(totals.payment)}</div></div>
