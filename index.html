@@ -1962,9 +1962,6 @@
     const bankName = $('bankSelect').value;
     if(!date || !bankName){ showBankEntryStatus('Pick a date and select a bank first.', true); return; }
     if(isExistingBankEntry && !checkEditPassword('edit this saved bank entry', showBankEntryStatus)) return;
-    if(payeesList.length === 0 && num($('bankTotalCollection').value) === 0 && num($('contraAmount').value) === 0){
-      showBankEntryStatus('Add at least one collection, payment, or transfer before saving.', true); return;
-    }
 
     const entry = {
       date, bankName,
