@@ -1682,7 +1682,33 @@
       </div>`;
     }).join('');
 
+    // Build per-bank latest closing balance (last entry date for each bank, non-mirror)
+    const bankClosing = {};
+    entries.forEach(e=>{
+      const isM = (!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0));
+      if(!isM){
+        if(!bankClosing[e.bankName] || e.date > bankClosing[e.bankName].date){
+          bankClosing[e.bankName] = { date: e.date, closing: num(e.closingBalance) };
+        }
+      }
+    });
+    const bankBalanceCards = Object.entries(bankClosing).map(([name, info])=>`
+      <div class="month-card" style="border-top-color:var(--ledger);">
+        <div class="lab">${escapeHtml(name)}</div>
+        <div style="font-size:10px;color:var(--ink-soft);font-family:'IBM Plex Mono',monospace;margin-top:2px;">${niceDate(info.date)}</div>
+        <div class="val" style="color:var(--ledger);font-size:17px;">${fmt(info.closing)}</div>
+      </div>`).join('');
+    const totalBankBalance = Object.values(bankClosing).reduce((s,v)=>s+v.closing, 0);
+
     area.innerHTML = `
+      <div style="margin-bottom:10px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--ledger);">Bank Closing Balances</div>
+      <div class="month-cards" style="margin-bottom:8px;">${bankBalanceCards}
+        <div class="month-card" style="border-top-color:var(--leather-dark);background:var(--ink);color:#fff;">
+          <div class="lab" style="color:rgba(255,255,255,.65);">Total Balance</div>
+          <div class="val" style="color:#fff;font-size:17px;">${fmt(totalBankBalance)}</div>
+        </div>
+      </div>
+      <hr style="border:none;border-top:1px solid var(--paper-line);margin:18px 0;">
       <div class="month-cards">
         <div class="month-card"><div class="lab">Opening (1st entry)</div><div class="val">${fmt(firstOpening)}</div></div>
         <div class="month-card"><div class="lab">Total Sales + Receipts</div><div class="val">${fmt(totals.sale + totals.received)}</div></div>
@@ -2308,7 +2334,33 @@
       </tr>`;
     }).join('');
 
+    // Build per-bank latest closing balance (last entry date for each bank, non-mirror)
+    const bankClosing = {};
+    entries.forEach(e=>{
+      const isM = (!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0));
+      if(!isM){
+        if(!bankClosing[e.bankName] || e.date > bankClosing[e.bankName].date){
+          bankClosing[e.bankName] = { date: e.date, closing: num(e.closingBalance) };
+        }
+      }
+    });
+    const bankBalanceCards = Object.entries(bankClosing).map(([name, info])=>`
+      <div class="month-card" style="border-top-color:var(--ledger);">
+        <div class="lab">${escapeHtml(name)}</div>
+        <div style="font-size:10px;color:var(--ink-soft);font-family:'IBM Plex Mono',monospace;margin-top:2px;">${niceDate(info.date)}</div>
+        <div class="val" style="color:var(--ledger);font-size:17px;">${fmt(info.closing)}</div>
+      </div>`).join('');
+    const totalBankBalance = Object.values(bankClosing).reduce((s,v)=>s+v.closing, 0);
+
     area.innerHTML = `
+      <div style="margin-bottom:10px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--ledger);">Bank Closing Balances</div>
+      <div class="month-cards" style="margin-bottom:8px;">${bankBalanceCards}
+        <div class="month-card" style="border-top-color:var(--leather-dark);background:var(--ink);color:#fff;">
+          <div class="lab" style="color:rgba(255,255,255,.65);">Total Balance</div>
+          <div class="val" style="color:#fff;font-size:17px;">${fmt(totalBankBalance)}</div>
+        </div>
+      </div>
+      <hr style="border:none;border-top:1px solid var(--paper-line);margin:18px 0;">
       <div class="month-cards">
         <div class="month-card"><div class="lab">Total Collections</div><div class="val">${fmt(totals.collection)}</div></div>
         <div class="month-card"><div class="lab">Total Payments</div><div class="val">${fmt(totals.payment)}</div></div>
