@@ -474,12 +474,59 @@
     .two-col{flex-direction:column;}
     header.top{flex-direction:column; align-items:flex-start; gap:10px;}
     .biz-input{text-align:left; width:100%;}
-    .app-shell{padding:30px 16px 80px 36px;}
+    .app-shell{padding:30px 12px 80px 30px;}
     body::before{width:16px;}
     body::after{left:16px; width:7px;}
     nav.tabs{overflow-x:auto; -webkit-overflow-scrolling:touch;}
     nav.tabs button{padding:10px 13px 9px; font-size:11px; white-space:nowrap;}
     h1{font-size:24px;}
+
+    /* Cards & forms */
+    .card{padding:16px 14px;}
+    .field-row{flex-direction:column; gap:10px;}
+    .field{min-width:unset; flex:none; width:100%;}
+
+    /* Expense rows stack vertically */
+    .expense-row{flex-direction:column; gap:6px; background:#FEFBF0; border:1px solid var(--paper-line); border-radius:8px; padding:10px 12px; margin-bottom:8px;}
+    .expense-row .field.col-type,
+    .expense-row .field.col-category,
+    .expense-row .field.col-amount,
+    .expense-row .field.col-narration{flex:none; width:100%;}
+    .expense-cols-head{display:none;}
+    .icon-btn.remove-exp{align-self:flex-end; margin-top:2px;}
+
+    /* Deposit rows */
+    .deposit-row{flex-direction:column; gap:6px; background:#FEFBF0; border:1px solid var(--paper-line); border-radius:8px; padding:10px 12px; margin-bottom:8px;}
+    .deposit-row .field.col-dep-amount,
+    .deposit-row .field.col-dep-note{flex:none; width:100%;}
+    .deposit-cols-head{display:none;}
+
+    /* Denom grid 2 columns */
+    .denom-grid{grid-template-columns:repeat(2,1fr);}
+
+    /* Summary grid 2 col */
+    .summary-grid{grid-template-columns:repeat(2,1fr);}
+
+    /* Month cards wrap */
+    .month-cards{grid-template-columns:repeat(2,1fr);}
+
+    /* Tables: horizontal scroll */
+    .ledger-sheet{padding:14px 10px;}
+    .ledger-sheet table, .month-table{font-size:11px;}
+    .ledger-sheet table td, .ledger-sheet table th,
+    .month-table td, .month-table th{padding:6px 7px;}
+
+    /* Report toolbar stack */
+    .report-toolbar{flex-direction:column; align-items:flex-start; gap:8px;}
+    .report-toolbar .field{width:100%;}
+    .report-toolbar .btn{width:100%; text-align:center;}
+
+    /* Btn row */
+    .btn-row{flex-direction:column;}
+    .btn-row .btn{width:100%; text-align:center;}
+
+    /* Bank entry item rows */
+    .item-row{flex-wrap:wrap;}
   }
 </style>
 </head>
