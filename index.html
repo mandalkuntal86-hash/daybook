@@ -1183,9 +1183,24 @@
     return false;
   }
 
-  $('entryDate').addEventListener('change', ()=>{
+  $('entryDate').addEventListener('change', async ()=>{
     $('entryStatus').textContent = '';
-    loadEntryIntoForm($('entryDate').value);
+    const dateIso = $('entryDate').value;
+    blankEntryForm();
+    $('deleteEntryBtn').style.display = 'none';
+    isExistingEntry = false;
+    // Check if entry already exists for this date
+    const existing = await storageGet(entryKey(dateIso), false);
+    if(existing && existing.value){
+      $('entryLoadHint').innerHTML = '<span style="color:var(--bad);font-weight:700;font-size:13px;">⚠ Already entered for ' + niceDate(dateIso) + '. Pick another date.</span>';
+      return;
+    }
+    const prev = await findPreviousClosing(dateIso);
+    $('openingBalance').value = prev !== null ? prev.closingBalance.toFixed(2) : 0;
+    recalcLive();
+    $('entryLoadHint').textContent = prev !== null
+      ? 'Opening balance pulled from ' + niceDate(prev.date) + "'s closing balance."
+      : 'New date selected. Set an opening balance.';
   });
 
   function blankEntryForm(){
@@ -1240,11 +1255,12 @@
 
     const result = await storageSet(entryKey(dateIso), JSON.stringify(entry), false);
     if(result){
-      showEntryStatus('Saved entry for ' + niceDate(dateIso) + '. Closing balance: ' + fmt(t.closingBalance), false);
-      $('deleteEntryBtn').style.display = 'inline-block';
+      showEntryStatus('Saved ✓  ' + niceDate(dateIso) + ' — Closing: ' + fmt(t.closingBalance), false);
       isExistingEntry = false;
       blankEntryForm();
-      $('entryLoadHint').textContent = 'Saved! Form cleared and ready for the next entry. Pick a date to load or edit a saved entry.';
+      $('deleteEntryBtn').style.display = 'none';
+      $('entryDate').value = '';
+      $('entryLoadHint').textContent = 'Entry saved! Pick the same date again to view/edit, or pick a new date for next entry.';
     } else {
       showEntryStatus('Could not save — please try again.', true);
     }
@@ -2174,10 +2190,42 @@
     const entries = [];
     results.forEach((r,i)=>{ if(r && r.value){ try{ const v = JSON.parse(r.value); v._key = keys[i]; entries.push(v); }catch(e){} } });
 
+    // --- Current Bank Balances: latest closing per bank up to selected date ---
+    const allKeys = await storageList('bank:', false);
+    const allResults = await Promise.all(allKeys.map(k => storageGet(k, false)));
+    const allEntries = [];
+    allResults.forEach((r,i)=>{ if(r && r.value){ try{ const v = JSON.parse(r.value); v._key = allKeys[i]; allEntries.push(v); }catch(e){} } });
+    const bankClosing = {};
+    allEntries
+      .filter(e => e.date <= date)
+      .forEach(e=>{
+        const isM = (!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0));
+        if(!isM){
+          if(!bankClosing[e.bankName] || e.date > bankClosing[e.bankName].date){
+            bankClosing[e.bankName] = { date: e.date, closing: num(e.closingBalance) };
+          }
+        }
+      });
+    const totalBankBalance = Object.values(bankClosing).reduce((s,v)=>s+v.closing, 0);
+    const bankBalanceCards = Object.entries(bankClosing).map(([name, info])=>`
+      <div class="month-card" style="border-top-color:var(--ledger);">
+        <div class="lab">${escapeHtml(name)}</div>
+        <div style="font-size:10px;color:var(--ink-soft);font-family:'IBM Plex Mono',monospace;margin-top:2px;">As of ${niceDate(info.date)}</div>
+        <div class="val" style="color:var(--ledger);font-size:17px;">${fmt(info.closing)}</div>
+      </div>`).join('');
+
     const byBank = {};
     entries.forEach(e=>{ (byBank[e.bankName] = byBank[e.bankName] || []).push(e); });
 
-    let html = '';
+    let html = `
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--ledger);margin-bottom:8px;">Current Bank Balances</div>
+      <div class="month-cards" style="margin-bottom:18px;">${bankBalanceCards}
+        <div class="month-card" style="border-top-color:var(--leather-dark);background:var(--ink);">
+          <div class="lab" style="color:rgba(255,255,255,.65);">Total Bank Balance</div>
+          <div class="val" style="color:#fff;font-size:17px;">${fmt(totalBankBalance)}</div>
+        </div>
+      </div>
+    `;
     for(const [bank, bankEntries] of Object.entries(byBank)){
       const totals = bankEntries.reduce((acc,e)=>{
         const isContraEntry = (!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0));
@@ -2191,7 +2239,7 @@
 
       const rowsHtml = bankEntries.map(e=>{
         const paymentTotal = (e.payees||[]).reduce((s,p)=>s+num(p.amount),0);
-        const payeeNames = (e.payees||[]).map(p=>escapeHtml(p.name)).join(', ');
+        const payeeNames = (e.payees||[]).map(p=>`<div style="display:flex;justify-content:space-between;gap:12px;border-bottom:1px dashed var(--paper-line);padding:3px 0;font-size:12px;"><span>${escapeHtml(p.name)}</span><span style="font-family:'IBM Plex Mono',monospace;font-weight:600;white-space:nowrap;">${fmt(num(p.amount))}</span></div>`).join('');
         const isContra = (!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0));
         const actionsHtml = isContra
           ? `<div class="row-actions">
