@@ -1409,7 +1409,54 @@
     let bizName = '';
     if(bizRes && bizRes.value){ try{ bizName = JSON.parse(bizRes.value).businessName || ''; }catch(e){} }
 
-    area.innerHTML = renderLedgerHtml(entry, dateIso, bizName);
+    // Fetch home cash balance (same logic as Month Report)
+    let homeOpeningBalance = 0;
+    let homeOpeningDate = '';
+    const homeRes = await storageGet('settings:homeOpening', false);
+    if(homeRes && homeRes.value){
+      try{ const hv = JSON.parse(homeRes.value); homeOpeningBalance = num(hv.balance); homeOpeningDate = hv.date || ''; }catch(e){}
+    }
+    // Sum all cash-book entries up to and including this date for home cash calculation
+    const ymCurrent = dateIso.slice(0,7);
+    // We need entries from homeOpeningDate's month through current month
+    let allEntries = [];
+    if(homeOpeningDate){
+      const startYm = homeOpeningDate.slice(0,7);
+      // Collect all months between startYm and ymCurrent
+      let cur = startYm;
+      while(cur <= ymCurrent){
+        const mKeys = await storageList('entry:' + cur, false);
+        if(mKeys && mKeys.length){
+          const mResults = await Promise.all(mKeys.map(k => storageGet(k, false)));
+          mResults.forEach(r=>{ if(r && r.value){ try{ allEntries.push(JSON.parse(r.value)); }catch(e){} } });
+        }
+        // Advance month
+        const [cy, cm] = cur.split('-').map(Number);
+        const next = cm === 12 ? `${cy+1}-01` : `${cy}-${String(cm+1).padStart(2,'0')}`;
+        cur = next;
+      }
+    }
+    const homeCashNet = homeOpeningBalance + allEntries.reduce((s,e)=>{
+      if(homeOpeningDate && e.date < homeOpeningDate) return s;
+      if(e.date > dateIso) return s; // only up to selected date
+      return s + num(e.cashSendToHome) - num(e.cashReceivedFromHome);
+    }, 0);
+
+    const balanceCardsHtml = `
+      <div class="month-cards" style="margin-bottom:18px;">
+        <div class="month-card" style="border-top-color:var(--ledger);">
+          <div class="lab">Current Cash Balance</div>
+          <div style="font-size:10px;color:var(--ink-soft);font-family:'IBM Plex Mono',monospace;margin-top:2px;">As of ${niceDate(dateIso)}</div>
+          <div class="val" style="color:var(--ledger);">${fmt(num(entry.closingBalance))}</div>
+        </div>
+        <div class="month-card" style="border-top-color:var(--rule);">
+          <div class="lab">Home Cash Balance</div>
+          <div style="font-size:10px;color:var(--ink-soft);font-family:'IBM Plex Mono',monospace;margin-top:2px;">${homeOpeningDate ? 'Since ' + niceDate(homeOpeningDate) : 'Set opening in Setup'}</div>
+          <div class="val" style="color:var(--rule);">${fmt(homeCashNet)}</div>
+        </div>
+      </div>`;
+
+    area.innerHTML = balanceCardsHtml + renderLedgerHtml(entry, dateIso, bizName);
     $('editDayBtn').style.display = 'inline-block';
     $('editDayBtn').onclick = ()=>{
       document.querySelector('.tab-btn[data-tab="entry"]').click();
