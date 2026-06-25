@@ -2216,12 +2216,31 @@
     const result = await storageSet('bank:' + date + ':' + bankName, JSON.stringify(entry), false);
 
     if(entry.contraBank && entry.contraAmount > 0){
-      // The mirror entry represents the receiving bank's side of the transfer, so it
-      // needs its own real opening balance (carried from that bank's last saved
-      // closing balance) rather than a hardcoded 0 — otherwise the receiving bank's
-      // opening/closing figures in reports come out wrong on transfer days.
-      const recvPrev = await findPreviousBankClosing(entry.contraBank, date);
-      const recvOpening = recvPrev !== null ? recvPrev.closingBalance : 0;
+      // The mirror entry represents the receiving bank's side of the transfer.
+      // CRITICAL FIX: If the receiving bank already has its own regular entry saved
+      // for this date (e.g. UCO day entries were saved BEFORE this HDFC→UCO contra),
+      // we must use that existing entry's opening balance and fold the contra amount
+      // into its closing — otherwise the closing is wrong when entry order differs.
+      const recvRegularKey = 'bank:' + date + ':' + entry.contraBank;
+      const recvRegularRes = await storageGet(recvRegularKey, false);
+      let recvOpening = 0;
+      let mirrorClosing;
+      if(recvRegularRes && recvRegularRes.value){
+        try{
+          const recvExisting = JSON.parse(recvRegularRes.value);
+          recvOpening = num(recvExisting.openingBalance);
+          // Recalculate the existing entry's closing to include the incoming contra amount
+          const recvPaymentTotal = (recvExisting.payees||[]).reduce((s,p)=>s+num(p.amount),0);
+          mirrorClosing = (recvOpening + num(recvExisting.collection) + num(recvExisting.cashDeposit) + entry.contraAmount) - (recvPaymentTotal + num(recvExisting.contraAmount));
+          // Also update the regular entry's stored closing so it stays in sync
+          recvExisting.closingBalance = mirrorClosing;
+          await storageSet(recvRegularKey, JSON.stringify(recvExisting), false);
+        }catch(e){ recvOpening = 0; mirrorClosing = entry.contraAmount; }
+      } else {
+        const recvPrev = await findPreviousBankClosing(entry.contraBank, date);
+        recvOpening = recvPrev !== null ? recvPrev.closingBalance : 0;
+        mirrorClosing = recvOpening + entry.contraAmount;
+      }
       const contraEntry = {
         date, bankName: entry.contraBank, accountNumber: '',
         openingBalance: recvOpening, collection: entry.contraAmount,
@@ -2229,7 +2248,7 @@
         contraBank: bankName, contraAmount: 0,
         isMirror: true,
         narration: 'Contra transfer from ' + bankName + (entry.narration ? ' — ' + entry.narration : ''),
-        closingBalance: recvOpening + entry.contraAmount, savedAt: new Date().toISOString()
+        closingBalance: mirrorClosing, savedAt: new Date().toISOString()
       };
       await storageSet('bank:' + date + ':' + entry.contraBank + ':contra', JSON.stringify(contraEntry), false);
     }
@@ -2293,8 +2312,25 @@
       .forEach(e=>{
         const isM = (!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0));
         if(!isM){
+          // Regular entry: always preferred — its closingBalance is kept in sync
+          // with any incoming contra (the save logic above updates it when a
+          // contra mirror is written on top of an existing regular entry).
           if(!bankClosing[e.bankName] || e.date > bankClosing[e.bankName].date){
             bankClosing[e.bankName] = { date: e.date, closing: num(e.closingBalance) };
+          }
+        } else {
+          // Mirror/contra entry: use its closing ONLY if no regular entry exists
+          // for the same bank on the same date (covers the case where a bank only
+          // received a transfer today with no other transactions of its own).
+          if(!bankClosing[e.bankName] || (e.date > bankClosing[e.bankName].date)){
+            // Peek ahead: is there a regular entry for this same date?
+            const hasRegularSameDay = allEntries.some(r =>
+              !r.isMirror && r.bankName === e.bankName && r.date === e.date &&
+              !(r.contraBank && num(r.contraAmount)===0 && num(r.collection)>0)
+            );
+            if(!hasRegularSameDay){
+              bankClosing[e.bankName] = { date: e.date, closing: num(e.closingBalance) };
+            }
           }
         }
       });
