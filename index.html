@@ -2301,40 +2301,50 @@
     const entries = [];
     results.forEach((r,i)=>{ if(r && r.value){ try{ const v = JSON.parse(r.value); v._key = keys[i]; entries.push(v); }catch(e){} } });
 
-    // --- Current Bank Balances: latest closing per bank up to selected date ---
+    // Load ALL bank entries (all dates) so balance cards show the true latest
+    // closing per bank up to the selected date, not just today's entries.
     const allKeys = await storageList('bank:', false);
     const allResults = await Promise.all(allKeys.map(k => storageGet(k, false)));
     const allEntries = [];
     allResults.forEach((r,i)=>{ if(r && r.value){ try{ const v = JSON.parse(r.value); v._key = allKeys[i]; allEntries.push(v); }catch(e){} } });
+
+    // Recalculate the true closing for a bank on a given date, merging
+    // the regular entry with its incoming mirror so that a transfer received
+    // after the regular entry was saved is never missed.
+    function calcTrueClosing(bankName, onDate, pool){
+      const reg = pool.find(e =>
+        e.bankName === bankName && e.date === onDate &&
+        !(!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0))
+      );
+      const mirror = pool.find(e =>
+        e.bankName === bankName && e.date === onDate &&
+        (!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0))
+      );
+      if(reg){
+        const paymentTotal = (reg.payees||[]).reduce((s,p)=>s+num(p.amount),0);
+        const incomingContra = mirror ? num(mirror.collection) : 0;
+        return num(reg.openingBalance) + num(reg.collection) + num(reg.cashDeposit)
+               + incomingContra - paymentTotal - num(reg.contraAmount);
+      } else if(mirror){
+        return num(mirror.closingBalance);
+      }
+      return null;
+    }
+
+    // Find the latest date ≤ selected date for each bank, then compute
+    // the true closing live (never trusting the stale stored closingBalance).
+    const bankLatestDate = {};
+    allEntries.filter(e => e.date <= date).forEach(e=>{
+      if(!bankLatestDate[e.bankName] || e.date > bankLatestDate[e.bankName])
+        bankLatestDate[e.bankName] = e.date;
+    });
     const bankClosing = {};
-    allEntries
-      .filter(e => e.date <= date)
-      .forEach(e=>{
-        const isM = (!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0));
-        if(!isM){
-          // Regular entry: always preferred — its closingBalance is kept in sync
-          // with any incoming contra (the save logic above updates it when a
-          // contra mirror is written on top of an existing regular entry).
-          if(!bankClosing[e.bankName] || e.date > bankClosing[e.bankName].date){
-            bankClosing[e.bankName] = { date: e.date, closing: num(e.closingBalance) };
-          }
-        } else {
-          // Mirror/contra entry: use its closing ONLY if no regular entry exists
-          // for the same bank on the same date (covers the case where a bank only
-          // received a transfer today with no other transactions of its own).
-          if(!bankClosing[e.bankName] || (e.date > bankClosing[e.bankName].date)){
-            // Peek ahead: is there a regular entry for this same date?
-            const hasRegularSameDay = allEntries.some(r =>
-              !r.isMirror && r.bankName === e.bankName && r.date === e.date &&
-              !(r.contraBank && num(r.contraAmount)===0 && num(r.collection)>0)
-            );
-            if(!hasRegularSameDay){
-              bankClosing[e.bankName] = { date: e.date, closing: num(e.closingBalance) };
-            }
-          }
-        }
-      });
+    Object.entries(bankLatestDate).forEach(([bankName, latestDate])=>{
+      const closing = calcTrueClosing(bankName, latestDate, allEntries);
+      if(closing !== null) bankClosing[bankName] = { date: latestDate, closing };
+    });
     const totalBankBalance = Object.values(bankClosing).reduce((s,v)=>s+v.closing, 0);
+
     const bankBalanceCards = Object.entries(bankClosing).map(([name, info])=>`
       <div class="month-card" style="border-top-color:var(--ledger);">
         <div class="lab">${escapeHtml(name)}</div>
@@ -2342,8 +2352,40 @@
         <div class="val" style="color:var(--ledger);font-size:17px;">${fmt(info.closing)}</div>
       </div>`).join('');
 
+    // --- Group entries by bank, then merge regular + mirror into single display rows ---
     const byBank = {};
     entries.forEach(e=>{ (byBank[e.bankName] = byBank[e.bankName] || []).push(e); });
+
+    // Build display rows: for each bank, pair a regular entry with its mirror (if any)
+    // so they appear as one merged row with the correct combined closing balance.
+    function buildDisplayRows(bankEntries){
+      const regulars = bankEntries.filter(e => !(!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0)));
+      const mirrors  = bankEntries.filter(e =>   !!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0));
+
+      const mirrorBySource = {}; // key: sourceBank name → mirror entry
+      mirrors.forEach(m=>{ if(m.contraBank) mirrorBySource[m.contraBank] = m; });
+
+      const rows = [];
+
+      if(regulars.length > 0){
+        // For each regular entry, check if this bank also has an incoming mirror
+        regulars.forEach(reg => {
+          // Find a mirror entry on this bank whose contraBank (= the source bank) is NOT this bank
+          // i.e. this bank is the *destination* of a transfer, so there's an incoming mirror for it.
+          // The mirror entry for THIS bank lives as a ":contra" record under this bank's name.
+          // We detect it: isMirror entries whose contraBank is the source bank (another bank sent money here).
+          const incomingMirror = mirrors.find(m => m.bankName === reg.bankName);
+          rows.push({ reg, incomingMirror: incomingMirror || null });
+        });
+        // Any mirrors not paired with a regular (bank only received a transfer, no own entry)
+        const pairedMirrors = new Set(rows.filter(r=>r.incomingMirror).map(r=>r.incomingMirror));
+        mirrors.filter(m=>!pairedMirrors.has(m)).forEach(m=>{ rows.push({ reg: null, incomingMirror: m }); });
+      } else {
+        // No regular entry at all — show each mirror as its own row
+        mirrors.forEach(m=>{ rows.push({ reg: null, incomingMirror: m }); });
+      }
+      return rows;
+    }
 
     let html = `
       <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--ledger);margin-bottom:8px;">Current Bank Balances</div>
@@ -2355,42 +2397,83 @@
       </div>
     `;
     for(const [bank, bankEntries] of Object.entries(byBank)){
+      const displayRows = buildDisplayRows(bankEntries);
+
+      // Totals: only count regular entries to avoid double-counting
       const totals = bankEntries.reduce((acc,e)=>{
         const isContraEntry = (!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0));
         acc.collection += isContraEntry ? 0 : num(e.collection);
-        acc.payment += (e.payees||[]).reduce((s,p)=>s+num(p.amount),0);
-        acc.deposit += num(e.cashDeposit);
-        // Mirror entries store the transfer amount in `collection`; regular entries in `contraAmount`
-        acc.contra += isContraEntry ? 0 : num(e.contraAmount); // only count source side to avoid double-counting
+        acc.payment += isContraEntry ? 0 : (e.payees||[]).reduce((s,p)=>s+num(p.amount),0);
+        acc.deposit += isContraEntry ? 0 : num(e.cashDeposit);
+        acc.contra += isContraEntry ? 0 : num(e.contraAmount);
         return acc;
       }, {collection:0, payment:0, deposit:0, contra:0});
 
-      const rowsHtml = bankEntries.map(e=>{
-        const paymentTotal = (e.payees||[]).reduce((s,p)=>s+num(p.amount),0);
-        const payeeNames = (e.payees||[]).map(p=>`<div style="display:flex;justify-content:space-between;gap:12px;border-bottom:1px dashed var(--paper-line);padding:3px 0;font-size:12px;"><span>${escapeHtml(p.name)}</span><span style="font-family:'IBM Plex Mono',monospace;font-weight:600;white-space:nowrap;">${fmt(num(p.amount))}</span></div>`).join('');
-        const isContra = (!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0));
-        const actionsHtml = isContra
-          ? `<div class="row-actions">
-               <button class="icon-btn sm delete-bank-entry" type="button" data-key="${e._key}" data-date="${date}" title="Delete contra entry">×</button>
-             </div>`
-          : `<div class="row-actions">
-               <button class="icon-btn sm edit edit-bank-entry" type="button" data-date="${date}" data-bank="${escapeHtml(bank)}" title="Edit">✎</button>
-               <button class="icon-btn sm delete-bank-entry" type="button" data-key="${e._key}" data-date="${date}" title="Delete">×</button>
-             </div>`;
-        // For mirror entries (isMirror:true), the transfer amount is in `collection`.
-        const contraAmtDisplay = isContra ? fmt(e.collection) : fmt(e.contraAmount);
-        const collectionDisplay = isContra ? fmt(0) : fmt(e.collection);
-        return `<tr>
-          <td>${fmt(e.openingBalance)}</td>
-          <td>${collectionDisplay}</td>
-          <td>${payeeNames || '—'}</td>
-          <td>${fmt(paymentTotal)}</td>
-          <td>${e.contraBank ? `<span class="${isContra ? 'tag-in' : 'tag-out'}">${isContra ? 'IN' : 'OUT'}</span><br>${escapeHtml(e.contraBank)}` : '—'}</td>
-          <td>${contraAmtDisplay}</td>
-          <td>${fmt(e.cashDeposit)}</td>
-          <td>${fmt(e.closingBalance)}</td>
-          <td>${actionsHtml}</td>
-        </tr>`;
+      const rowsHtml = displayRows.map(({reg, incomingMirror})=>{
+        // --- Merged row: prefer the regular entry as the base; overlay incoming mirror info ---
+        if(reg){
+          const paymentTotal = (reg.payees||[]).reduce((s,p)=>s+num(p.amount),0);
+          const payeeNames = (reg.payees||[]).map(p=>`<div style="display:flex;justify-content:space-between;gap:12px;border-bottom:1px dashed var(--paper-line);padding:3px 0;font-size:12px;"><span>${escapeHtml(p.name)}</span><span style="font-family:'IBM Plex Mono',monospace;font-weight:600;white-space:nowrap;">${fmt(num(p.amount))}</span></div>`).join('');
+
+          // Outgoing contra (from the regular entry itself)
+          const hasOutgoing = reg.contraBank && num(reg.contraAmount) > 0;
+          // Incoming contra (from the mirror, if paired)
+          const hasIncoming = incomingMirror && num(incomingMirror.collection) > 0;
+
+          // Build the Contra Bank cell: show OUT first (if any), then IN (if any), separated
+          let contraBankCell = '—';
+          let contraAmtCell = '—';
+          if(hasOutgoing && hasIncoming){
+            contraBankCell = `<span class="tag-out">OUT</span> ${escapeHtml(reg.contraBank)}<br><span class="tag-in">IN</span> ${escapeHtml(incomingMirror.contraBank)}`;
+            contraAmtCell = `${fmt(reg.contraAmount)}<br>${fmt(incomingMirror.collection)}`;
+          } else if(hasOutgoing){
+            contraBankCell = `<span class="tag-out">OUT</span><br>${escapeHtml(reg.contraBank)}`;
+            contraAmtCell = fmt(reg.contraAmount);
+          } else if(hasIncoming){
+            contraBankCell = `<span class="tag-in">IN</span><br>${escapeHtml(incomingMirror.contraBank)}`;
+            contraAmtCell = fmt(incomingMirror.collection);
+          }
+
+          // Correct closing: opening + collection + cashDeposit + incomingContra - payments - outgoingContra
+          const incomingContraAmt = hasIncoming ? num(incomingMirror.collection) : 0;
+          const correctClosing = num(reg.openingBalance) + num(reg.collection) + num(reg.cashDeposit)
+                                 + incomingContraAmt - paymentTotal - num(reg.contraAmount);
+
+          const actionsHtml = `<div class="row-actions">
+            <button class="icon-btn sm edit edit-bank-entry" type="button" data-date="${date}" data-bank="${escapeHtml(bank)}" title="Edit">✎</button>
+            <button class="icon-btn sm delete-bank-entry" type="button" data-key="${reg._key}" data-date="${date}" title="Delete">×</button>
+            ${incomingMirror ? `<button class="icon-btn sm delete-bank-entry" type="button" data-key="${incomingMirror._key}" data-date="${date}" title="Delete incoming transfer">×</button>` : ''}
+          </div>`;
+
+          return `<tr>
+            <td>${fmt(reg.openingBalance)}</td>
+            <td>${fmt(reg.collection)}</td>
+            <td>${payeeNames || '—'}</td>
+            <td>${fmt(paymentTotal)}</td>
+            <td>${contraBankCell}</td>
+            <td>${contraAmtCell}</td>
+            <td>${fmt(reg.cashDeposit)}</td>
+            <td>${fmt(correctClosing)}</td>
+            <td>${actionsHtml}</td>
+          </tr>`;
+        } else {
+          // Only a mirror entry — no regular entry for this bank today
+          const m = incomingMirror;
+          const actionsHtml = `<div class="row-actions">
+            <button class="icon-btn sm delete-bank-entry" type="button" data-key="${m._key}" data-date="${date}" title="Delete contra entry">×</button>
+          </div>`;
+          return `<tr>
+            <td>${fmt(m.openingBalance)}</td>
+            <td>—</td>
+            <td>—</td>
+            <td>—</td>
+            <td><span class="tag-in">IN</span><br>${escapeHtml(m.contraBank||'')}</td>
+            <td>${fmt(m.collection)}</td>
+            <td>${fmt(m.cashDeposit)}</td>
+            <td>${fmt(m.closingBalance)}</td>
+            <td>${actionsHtml}</td>
+          </tr>`;
+        }
       }).join('');
 
       html += `
@@ -2511,43 +2594,84 @@
     entries.sort((a,b)=> a.date.localeCompare(b.date));
     lastBankMonthRows = entries;
 
+    // Recalculate closing live for a bank on a given date, merging regular + mirror.
+    function calcMonthTrueClosing(bankName, onDate, pool){
+      const reg = pool.find(e =>
+        e.bankName === bankName && e.date === onDate &&
+        !(!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0))
+      );
+      const mirror = pool.find(e =>
+        e.bankName === bankName && e.date === onDate &&
+        (!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0))
+      );
+      if(reg){
+        const paymentTotal = (reg.payees||[]).reduce((s,p)=>s+num(p.amount),0);
+        const incomingContra = mirror ? num(mirror.collection) : 0;
+        return num(reg.openingBalance) + num(reg.collection) + num(reg.cashDeposit)
+               + incomingContra - paymentTotal - num(reg.contraAmount);
+      } else if(mirror){
+        return num(mirror.closingBalance);
+      }
+      return null;
+    }
+
     const totals = entries.reduce((acc,e)=>{
       const isContraEntry = (!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0));
       acc.collection += isContraEntry ? 0 : num(e.collection);
-      acc.payment += (e.payees||[]).reduce((s,p)=>s+num(p.amount),0);
-      // Mirror entries store the transfer amount in `collection`; regular entries in `contraAmount`
-      acc.contra += isContraEntry ? 0 : num(e.contraAmount); // only count source side to avoid double-counting
-      acc.deposit += num(e.cashDeposit);
+      acc.payment += isContraEntry ? 0 : (e.payees||[]).reduce((s,p)=>s+num(p.amount),0);
+      acc.contra += isContraEntry ? 0 : num(e.contraAmount);
+      acc.deposit += isContraEntry ? 0 : num(e.cashDeposit);
       return acc;
     }, {collection:0, payment:0, contra:0, deposit:0});
 
-    const rowsHtml = entries.map(e=>{
-      const isContraEntry = (!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0));
+    // Build month table rows — skip pure mirror entries (they are shown merged into the regular row)
+    const rowsHtml = entries.filter(e =>
+      !(!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0))
+    ).map(e=>{
+      const mirror = entries.find(m =>
+        m.bankName === e.bankName && m.date === e.date &&
+        (!!m.isMirror || (m.contraBank && num(m.contraAmount)===0 && num(m.collection)>0))
+      );
       const paymentTotal = (e.payees||[]).reduce((s,p)=>s+num(p.amount),0);
-      const contraAmtDisplay = isContraEntry ? fmt(e.collection) : fmt(e.contraAmount);
-      const collectionDisplay = isContraEntry ? fmt(0) : fmt(e.collection);
+      const hasIncoming = mirror && num(mirror.collection) > 0;
+      const incomingContra = hasIncoming ? num(mirror.collection) : 0;
+      const correctClosing = num(e.openingBalance) + num(e.collection) + num(e.cashDeposit)
+                             + incomingContra - paymentTotal - num(e.contraAmount);
+
+      let contraBankCell = e.contraBank
+        ? `<span class="tag-out">OUT</span><br>${escapeHtml(e.contraBank)}`
+        : '—';
+      let contraAmtCell = e.contraBank ? fmt(e.contraAmount) : '—';
+      if(hasIncoming){
+        contraBankCell += (e.contraBank ? '<br>' : '') +
+          `<span class="tag-in">IN</span><br>${escapeHtml(mirror.contraBank||'')}`;
+        contraAmtCell += (e.contraBank ? '<br>' : '') + fmt(incomingContra);
+        if(!e.contraBank){ contraBankCell = `<span class="tag-in">IN</span><br>${escapeHtml(mirror.contraBank||'')}`; contraAmtCell = fmt(incomingContra); }
+      }
+
       return `<tr>
         <td>${niceDate(e.date)}</td>
         <td>${escapeHtml(e.bankName)}</td>
         <td>${fmt(e.openingBalance)}</td>
-        <td>${collectionDisplay}</td>
+        <td>${fmt(e.collection)}</td>
         <td>${fmt(paymentTotal)}</td>
-        <td>${e.contraBank ? `<span class="${isContraEntry ? 'tag-in' : 'tag-out'}">${isContraEntry ? 'IN' : 'OUT'}</span><br>${escapeHtml(e.contraBank)}` : '—'}</td>
-        <td>${contraAmtDisplay}</td>
+        <td>${contraBankCell}</td>
+        <td>${contraAmtCell}</td>
         <td>${fmt(e.cashDeposit)}</td>
-        <td>${fmt(e.closingBalance)}</td>
+        <td>${fmt(correctClosing)}</td>
       </tr>`;
     }).join('');
 
-    // Per-bank latest closing balance (last non-mirror entry per bank)
-    const bankClosing = {};
+    // Per-bank latest closing: recalculate live, never trust stored closingBalance
+    const bankLatestDateM = {};
     entries.forEach(e=>{
-      const isM = (!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0));
-      if(!isM){
-        if(!bankClosing[e.bankName] || e.date > bankClosing[e.bankName].date){
-          bankClosing[e.bankName] = { date: e.date, closing: num(e.closingBalance) };
-        }
-      }
+      if(!bankLatestDateM[e.bankName] || e.date > bankLatestDateM[e.bankName])
+        bankLatestDateM[e.bankName] = e.date;
+    });
+    const bankClosing = {};
+    Object.entries(bankLatestDateM).forEach(([bankName, latestDate])=>{
+      const closing = calcMonthTrueClosing(bankName, latestDate, entries);
+      if(closing !== null) bankClosing[bankName] = { date: latestDate, closing };
     });
     const totalBankBalance = Object.values(bankClosing).reduce((s,v)=>s+v.closing, 0);
     const bankBalanceCards = Object.entries(bankClosing).map(([name, info])=>`
