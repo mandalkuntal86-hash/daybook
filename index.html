@@ -959,16 +959,27 @@
   const EXPENSE_CATEGORIES = ['Rent','Electricity Bill','Staff Salary / Wages','Transport / Conveyance','Tea & Refreshment','Stationery','Repair & Maintenance','Telephone / Mobile / Internet','Packing Material','Loading / Unloading','Shop Maintenance','Miscellaneous'];
   const CONTRA_CATEGORIES = ['Cash Deposit to Bank','Cash Withdrawn from Bank','Cash Sent to Home','Cash Received from Home','Transfer to Other Cash Box',"Owner's Drawings"];
 
-  function populateCategoryDatalist(row, type){
-    const dl = row.querySelector('datalist');
-    dl.innerHTML = '';
-    const list = (type === 'contra') ? CONTRA_CATEGORIES : EXPENSE_CATEGORIES;
-    list.forEach(c=>{
-      const opt = document.createElement('option');
-      opt.value = c;
-      dl.appendChild(opt);
-    });
+  /* --- category history: load all saved entries and collect unique category names --- */
+  let _catHistoryCache = null;
+  async function getCategoryHistory(){
+    if(_catHistoryCache) return _catHistoryCache;
+    const cats = new Set([...EXPENSE_CATEGORIES, ...CONTRA_CATEGORIES]);
+    try{
+      const keys = await storageList('entry:', false);
+      const results = await Promise.all((keys||[]).map(k=>storageGet(k,false)));
+      results.forEach(r=>{
+        if(r && r.value){
+          try{
+            const v = JSON.parse(r.value);
+            (v.expenses||[]).forEach(e=>{ if(e.category && e.category.trim()) cats.add(e.category.trim()); });
+          }catch(e){}
+        }
+      });
+    }catch(e){}
+    _catHistoryCache = [...cats];
+    return _catHistoryCache;
   }
+  function invalidateCatHistory(){ _catHistoryCache = null; }
 
   function addExpenseRow(type, category, amount, narration){
     expenseIdCounter += 1;
@@ -985,7 +996,7 @@
         </select>
       </div>
       <div class="field col-category">
-        <input type="text" class="exp-category label-input" list="catlist-${id}" placeholder="Category" value="${category ? escapeHtml(category) : ''}">
+        <input type="text" class="exp-category label-input" list="catlist-${id}" placeholder="Category" autocomplete="off" value="${category ? escapeHtml(category) : ''}">
         <datalist id="catlist-${id}"></datalist>
       </div>
       <div class="field col-amount">
@@ -997,12 +1008,14 @@
       <button type="button" class="icon-btn remove-exp" title="Remove line">×</button>
     `;
     $('expenseRows').appendChild(row);
-    populateCategoryDatalist(row, safeType);
+    const dl = row.querySelector('datalist');
+    // Populate datalist from history (async)
+    getCategoryHistory().then(cats=>{
+      dl.innerHTML = cats.map(c=>`<option value="${escapeHtml(c)}">`).join('');
+    });
     row.querySelector('.remove-exp').addEventListener('click', ()=>{ row.remove(); recalcLive(); });
     row.querySelector('.exp-amount').addEventListener('input', recalcLive);
-    row.querySelector('.exp-type').addEventListener('change', (e)=>{
-      populateCategoryDatalist(row, e.target.value);
-    });
+    row.querySelector('.exp-type').addEventListener('change', ()=>{});
   }
 
   function escapeHtml(s){
@@ -1302,6 +1315,7 @@
 
     const result = await storageSet(entryKey(dateIso), JSON.stringify(entry), false);
     if(result){
+      invalidateCatHistory();
       showEntryStatus('Saved ✓  ' + niceDate(dateIso) + ' — Closing: ' + fmt(t.closingBalance), false);
       isExistingEntry = false;
       blankEntryForm();
@@ -1370,7 +1384,7 @@
               <tr class="total-row"><td class="lab">Total Cash</td><td class="amt">${fmt(entry.totalCash)}</td></tr>
               <tr><td class="lab">Balance Cash</td><td class="amt">${fmt(entry.balanceCash)}</td></tr>
               <tr><td class="lab">Cash Send To Home</td><td class="amt">${fmt(entry.cashSendToHome)}</td></tr>
-              ${entry.cashSendToHomeDenomination && entry.cashSendToHomeDenomination.length ? `<tr class="denom-report-row"><td colspan="2"><div class="denom-report">${entry.cashSendToHomeDenomination.slice().sort((a,b)=>b.note-a.note).map(d=>`<span class="denom-line">₹${d.note} × ${d.qty} = ₹${fmt(d.amount)}</span>`).join('')}</div></td></tr>` : ''}
+              ${entry.cashSendToHomeDenomination && entry.cashSendToHomeDenomination.length ? `<tr class="denom-report-row"><td colspan="2"><div class="denom-report">${entry.cashSendToHomeDenomination.slice().sort((a,b)=>b.note-a.note).map(d=>`<span class="denom-line">₹${d.note} × ${d.qty} = ${fmt(d.amount)}</span>`).join('')}</div></td></tr>` : ''}
               <tr class="closing-row"><td class="lab">Closing Balance</td><td class="amt">${fmt(entry.closingBalance)}</td></tr>
             </table>
           </div>
