@@ -2631,6 +2631,14 @@
     entries.sort((a,b)=> a.date.localeCompare(b.date));
     lastBankMonthRows = entries;
 
+    // Load ALL bank entries (every date, not just this month) so the balance
+    // cards can show a bank's true latest closing even if it had no activity
+    // during the selected month (e.g. a dormant account with an older entry).
+    const allKeysM = await storageList('bank:', false);
+    const allResultsM = await Promise.all(allKeysM.map(k => storageGet(k, false)));
+    const allEntriesM = [];
+    allResultsM.forEach((r,i)=>{ if(r && r.value){ try{ const v = JSON.parse(r.value); v._key = allKeysM[i]; allEntriesM.push(v); }catch(e){} } });
+
     // Recalculate closing live for a bank on a given date, merging regular + mirror.
     function calcMonthTrueClosing(bankName, onDate, pool){
       const reg = pool.find(e =>
@@ -2699,15 +2707,17 @@
       </tr>`;
     }).join('');
 
-    // Per-bank latest closing: recalculate live, never trust stored closingBalance
+    // Per-bank latest closing: recalculate live, never trust stored closingBalance.
+    // Uses the all-time entry pool (not just the selected month) so a bank with
+    // no transactions this month still reports its true current balance.
     const bankLatestDateM = {};
-    entries.forEach(e=>{
+    allEntriesM.forEach(e=>{
       if(!bankLatestDateM[e.bankName] || e.date > bankLatestDateM[e.bankName])
         bankLatestDateM[e.bankName] = e.date;
     });
     const bankClosing = {};
     Object.entries(bankLatestDateM).forEach(([bankName, latestDate])=>{
-      const closing = calcMonthTrueClosing(bankName, latestDate, entries);
+      const closing = calcMonthTrueClosing(bankName, latestDate, allEntriesM);
       if(closing !== null) bankClosing[bankName] = { date: latestDate, closing };
     });
     const totalBankBalance = Object.values(bankClosing).reduce((s,v)=>s+v.closing, 0);
