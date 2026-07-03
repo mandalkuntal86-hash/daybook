@@ -1822,16 +1822,39 @@
       </div>`;
     }).join('');
 
-    // Home cash: opening balance (set in Setup) + all sent-to-home - all received-from-home
+    // Home cash: opening balance (set in Setup) + all sent-to-home - all received-from-home,
+    // accumulated across every month from the opening date through the last day of this report
+    // (same logic as Day Report, so the two tabs always agree).
     let homeOpeningBalance = 0;
     let homeOpeningDate = '';
     const homeRes = await storageGet('settings:homeOpening', false);
     if(homeRes && homeRes.value){
       try{ const hv = JSON.parse(homeRes.value); homeOpeningBalance = num(hv.balance); homeOpeningDate = hv.date || ''; }catch(e){}
     }
-    // Only count cash entries on or after the opening date
-    const homeCashNet = homeOpeningBalance + entries.reduce((s,e)=>{
+    const homeAsOfDate = entries[entries.length-1].date;
+    let homeAllEntries = [];
+    if(homeOpeningDate){
+      const startYm = homeOpeningDate.slice(0,7);
+      let cur = startYm;
+      while(cur <= ym){
+        if(cur === ym){
+          // Already have this month's entries loaded above.
+          homeAllEntries = homeAllEntries.concat(entries);
+        } else {
+          const mKeys = await storageList('entry:' + cur, false);
+          if(mKeys && mKeys.length){
+            const mResults = await Promise.all(mKeys.map(k => storageGet(k, false)));
+            mResults.forEach(r=>{ if(r && r.value){ try{ homeAllEntries.push(JSON.parse(r.value)); }catch(e){} } });
+          }
+        }
+        const [cy, cm] = cur.split('-').map(Number);
+        cur = cm === 12 ? `${cy+1}-01` : `${cy}-${String(cm+1).padStart(2,'0')}`;
+      }
+    }
+    // Only count cash entries on or after the opening date, up to the last day of this month's report
+    const homeCashNet = homeOpeningBalance + homeAllEntries.reduce((s,e)=>{
       if(homeOpeningDate && e.date < homeOpeningDate) return s;
+      if(e.date > homeAsOfDate) return s;
       return s + num(e.cashSendToHome) - num(e.cashReceivedFromHome);
     }, 0);
 
