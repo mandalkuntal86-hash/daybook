@@ -2882,39 +2882,49 @@
     cashArea.innerHTML = '<div class="dash-empty">Loading…</div>';
     bankArea.innerHTML = '<div class="dash-empty">Loading…</div>';
 
+    // Fetch everything we need for the top-level lists/settings in parallel —
+    // this used to be a slow sequential month-by-month crawl; now it's 3 calls.
+    const [entryKeysAll, bankKeys, homeRes] = await Promise.all([
+      storageList('entry:', false),
+      storageList('bank:', false),
+      storageGet('settings:homeOpening', false)
+    ]);
+
     // ---- current cash balance: most recent cash-book entry, whatever the date ----
-    const latest = await findPreviousClosing('9999-12-31');
-    const currentCashBalance = latest ? num(latest.closingBalance) : 0;
-    const asOfDate = latest ? latest.date : null;
+    const entryDates = entryKeysAll.map(k => k.replace('entry:','')).sort();
+    const asOfDate = entryDates.length ? entryDates[entryDates.length - 1] : null;
 
     // ---- home cash balance, carried forward up to that same date ----
     let homeOpeningBalance = 0, homeOpeningDate = '';
-    const homeRes = await storageGet('settings:homeOpening', false);
     if(homeRes && homeRes.value){
       try{ const hv = JSON.parse(homeRes.value); homeOpeningBalance = num(hv.balance); homeOpeningDate = hv.date || ''; }catch(e){}
     }
     const uptoDate = asOfDate || todayISO();
-    let homeCashNet = homeOpeningBalance;
-    if(homeOpeningDate){
-      const startYm = homeOpeningDate.slice(0,7);
-      const ymCurrent = uptoDate.slice(0,7);
-      let cur = startYm;
-      const homeEntries = [];
-      while(cur <= ymCurrent){
-        const mKeys = await storageList('entry:' + cur, false);
-        if(mKeys && mKeys.length){
-          const mResults = await Promise.all(mKeys.map(k => storageGet(k, false)));
-          mResults.forEach(r=>{ if(r && r.value){ try{ homeEntries.push(JSON.parse(r.value)); }catch(e){} } });
-        }
-        const [cy, cm] = cur.split('-').map(Number);
-        cur = cm === 12 ? `${cy+1}-01` : `${cy}-${String(cm+1).padStart(2,'0')}`;
-      }
-      homeCashNet = homeOpeningBalance + homeEntries.reduce((s,e)=>{
-        if(e.date < homeOpeningDate) return s;
-        if(e.date > uptoDate) return s;
-        return s + num(e.cashSendToHome) - num(e.cashReceivedFromHome);
-      }, 0);
-    }
+
+    // Only fetch entries actually needed: those inside the home-cash date
+    // range, plus the single latest entry for the closing balance — instead
+    // of downloading every entry ever saved.
+    const relevantEntryKeys = entryKeysAll.filter(k=>{
+      const d = k.replace('entry:','');
+      if(homeOpeningDate && d < homeOpeningDate) return false;
+      if(d > uptoDate) return false;
+      return true;
+    });
+    const keysToFetch = Array.from(new Set(asOfDate ? [...relevantEntryKeys, entryKey(asOfDate)] : relevantEntryKeys));
+    const fetchedResults = await Promise.all(keysToFetch.map(k => storageGet(k, false)));
+    const fetchedMap = {};
+    fetchedResults.forEach((r,i)=>{
+      if(r && r.value){ try{ fetchedMap[keysToFetch[i]] = JSON.parse(r.value); }catch(e){} }
+    });
+
+    const currentCashBalance = (asOfDate && fetchedMap[entryKey(asOfDate)])
+      ? num(fetchedMap[entryKey(asOfDate)].closingBalance) : 0;
+
+    const homeCashNet = homeOpeningBalance + relevantEntryKeys.reduce((s,k)=>{
+      const v = fetchedMap[k];
+      if(!v) return s;
+      return s + num(v.cashSendToHome) - num(v.cashReceivedFromHome);
+    }, 0);
 
     cashArea.innerHTML = `
       <div class="dash-card" style="--accent:var(--ledger);">
@@ -2931,7 +2941,6 @@
       </div>`;
 
     // ---- bank balances ----
-    const bankKeys = await storageList('bank:', false);
     const bankResults = await Promise.all(bankKeys.map(k => storageGet(k, false)));
     const bankEntries = [];
     bankResults.forEach((r,i)=>{ if(r && r.value){ try{ const v = JSON.parse(r.value); v._key = bankKeys[i]; bankEntries.push(v); }catch(e){} } });
