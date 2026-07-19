@@ -436,6 +436,51 @@
   .month-card .val{font-family:'IBM Plex Mono',monospace; font-size:19px; font-weight:600; margin-top:6px; color:var(--leather-dark);}
 
   table.month-table{width:100%; border-collapse:collapse; font-size:13px;}
+  /* ---------- Dashboard ---------- */
+  .dash-section-title{
+    font-family:'IBM Plex Mono',monospace; font-size:11px; font-weight:700;
+    letter-spacing:1px; text-transform:uppercase; color:var(--ink-soft);
+    margin:0 0 12px; display:flex; align-items:center; gap:10px;
+  }
+  .dash-section-title::after{content:''; flex:1; height:1px; background:var(--paper-line);}
+  .dash-cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:16px; margin-bottom:30px;}
+  .dash-card{
+    --accent:var(--gold);
+    background:#fff; border:1px solid var(--paper-line); border-radius:12px;
+    border-top:4px solid var(--accent);
+    padding:20px 20px 18px; position:relative; overflow:hidden;
+    box-shadow:var(--shadow);
+  }
+  .dash-card::after{
+    content:''; position:absolute; right:-28px; bottom:-28px; width:100px; height:100px;
+    border-radius:50%; background:var(--accent); opacity:.10; pointer-events:none;
+  }
+  .dash-card .dash-icon{
+    position:absolute; top:16px; right:16px; width:36px; height:36px; border-radius:10px;
+    background:var(--accent); opacity:1; display:flex; align-items:center; justify-content:center;
+  }
+  .dash-card .dash-icon svg{width:18px; height:18px; stroke:#fff;}
+  .dash-card .lab{
+    font-size:10.5px; text-transform:uppercase; letter-spacing:.6px; color:var(--ink-soft);
+    font-family:'IBM Plex Mono',monospace; font-weight:700; padding-right:46px;
+  }
+  .dash-card .val{
+    font-family:'IBM Plex Mono',monospace; font-size:24px; font-weight:700; margin-top:9px;
+    color:var(--leather-dark); position:relative; z-index:1;
+  }
+  .dash-card .sub{font-size:11px; color:var(--ink-soft); margin-top:5px; position:relative; z-index:1;}
+  .dash-card.dark{background:var(--ink); border-color:var(--ink);}
+  .dash-card.dark .lab{color:rgba(255,255,255,.6);}
+  .dash-card.dark .val{color:#fff;}
+  .dash-card.dark .sub{color:rgba(255,255,255,.45);}
+  .dash-card.dark::after{background:#fff; opacity:.06;}
+  .dash-empty{
+    grid-column:1/-1; text-align:center; padding:28px 16px; color:var(--ink-soft);
+    background:#fff; border:1px dashed var(--paper-line); border-radius:12px; font-size:13px;
+  }
+  .dash-actions{display:flex; gap:12px; flex-wrap:wrap; margin-bottom:8px;}
+  .dash-actions .btn{display:flex; align-items:center; gap:8px;}
+
   table.month-table th, table.month-table td{
     border:1px solid var(--paper-line); padding:9px 11px; text-align:right;
   }
@@ -547,7 +592,8 @@
   </header>
 
   <nav class="tabs">
-    <button class="tab-btn active" data-tab="entry">New Entry</button>
+    <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
+    <button class="tab-btn" data-tab="entry">New Entry</button>
     <button class="tab-btn" data-tab="day">Day Report</button>
     <button class="tab-btn" data-tab="month">Month Report</button>
     <button class="tab-btn" data-tab="bank-setup">Bank Setup</button>
@@ -556,8 +602,27 @@
     <button class="tab-btn" data-tab="bank-month">Bank Month Report</button>
   </nav>
 
+  <!-- ================= DASHBOARD ================= -->
+  <section class="panel active" id="panel-dashboard">
+    <div class="dash-section-title">Cash Position</div>
+    <div id="dashCashArea" class="dash-cards">
+      <div class="dash-empty">Loading…</div>
+    </div>
+
+    <div class="dash-section-title">Bank Balances</div>
+    <div id="dashBankArea" class="dash-cards">
+      <div class="dash-empty">Loading…</div>
+    </div>
+
+    <div class="dash-section-title">Quick Reports</div>
+    <div class="dash-actions">
+      <button class="btn btn-primary" id="dashDayReportBtn" type="button">Day Cash Report</button>
+      <button class="btn btn-primary" id="dashBankDayReportBtn" type="button">Bank Day Report</button>
+    </div>
+  </section>
+
   <!-- ================= NEW ENTRY ================= -->
-  <section class="panel active" id="panel-entry">
+  <section class="panel" id="panel-entry">
     <div class="card">
       <h2>Entry for</h2>
       <div class="field-row">
@@ -933,6 +998,7 @@
       document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
       btn.classList.add('active');
       $('panel-'+btn.dataset.tab).classList.add('active');
+      if(btn.dataset.tab === 'dashboard') loadDashboard();
     });
   });
 
@@ -2781,10 +2847,143 @@
     document.body.appendChild(a); a.click(); a.remove();
   });
 
+  /* ---------------- dashboard ---------------- */
+  const DASH_ICONS = {
+    wallet: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>`,
+    home: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M9 22V12h6v10"/></svg>`,
+    bank: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V10"/><path d="M9 21V10"/><path d="M15 21V10"/><path d="M19 21V10"/><path d="M2.5 10 12 3l9.5 7"/></svg>`,
+    stack: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5Z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>`
+  };
+  const DASH_PALETTE = ['#2F6F4E','#A3402E','#A87B26','#5A371F','#1B4332','#8A4B08','#3B2317'];
+
+  function calcBankTrueClosing(bankName, onDate, pool){
+    const reg = pool.find(e =>
+      e.bankName === bankName && e.date === onDate &&
+      !(!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0))
+    );
+    const mirror = pool.find(e =>
+      e.bankName === bankName && e.date === onDate &&
+      (!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0))
+    );
+    if(reg){
+      const paymentTotal = (reg.payees||[]).reduce((s,p)=>s+num(p.amount),0);
+      const incomingContra = mirror ? num(mirror.collection) : 0;
+      return num(reg.openingBalance) + num(reg.collection) + num(reg.cashDeposit)
+             + incomingContra - paymentTotal - num(reg.contraAmount);
+    } else if(mirror){
+      return num(mirror.closingBalance);
+    }
+    return null;
+  }
+
+  async function loadDashboard(){
+    const cashArea = $('dashCashArea');
+    const bankArea = $('dashBankArea');
+    cashArea.innerHTML = '<div class="dash-empty">Loading…</div>';
+    bankArea.innerHTML = '<div class="dash-empty">Loading…</div>';
+
+    // ---- current cash balance: most recent cash-book entry, whatever the date ----
+    const latest = await findPreviousClosing('9999-12-31');
+    const currentCashBalance = latest ? num(latest.closingBalance) : 0;
+    const asOfDate = latest ? latest.date : null;
+
+    // ---- home cash balance, carried forward up to that same date ----
+    let homeOpeningBalance = 0, homeOpeningDate = '';
+    const homeRes = await storageGet('settings:homeOpening', false);
+    if(homeRes && homeRes.value){
+      try{ const hv = JSON.parse(homeRes.value); homeOpeningBalance = num(hv.balance); homeOpeningDate = hv.date || ''; }catch(e){}
+    }
+    const uptoDate = asOfDate || todayISO();
+    let homeCashNet = homeOpeningBalance;
+    if(homeOpeningDate){
+      const startYm = homeOpeningDate.slice(0,7);
+      const ymCurrent = uptoDate.slice(0,7);
+      let cur = startYm;
+      const homeEntries = [];
+      while(cur <= ymCurrent){
+        const mKeys = await storageList('entry:' + cur, false);
+        if(mKeys && mKeys.length){
+          const mResults = await Promise.all(mKeys.map(k => storageGet(k, false)));
+          mResults.forEach(r=>{ if(r && r.value){ try{ homeEntries.push(JSON.parse(r.value)); }catch(e){} } });
+        }
+        const [cy, cm] = cur.split('-').map(Number);
+        cur = cm === 12 ? `${cy+1}-01` : `${cy}-${String(cm+1).padStart(2,'0')}`;
+      }
+      homeCashNet = homeOpeningBalance + homeEntries.reduce((s,e)=>{
+        if(e.date < homeOpeningDate) return s;
+        if(e.date > uptoDate) return s;
+        return s + num(e.cashSendToHome) - num(e.cashReceivedFromHome);
+      }, 0);
+    }
+
+    cashArea.innerHTML = `
+      <div class="dash-card" style="--accent:var(--ledger);">
+        <div class="dash-icon">${DASH_ICONS.wallet}</div>
+        <div class="lab">Current Cash Balance</div>
+        <div class="val">${fmt(currentCashBalance)}</div>
+        <div class="sub">${asOfDate ? 'As of ' + niceDate(asOfDate) : 'No entries recorded yet'}</div>
+      </div>
+      <div class="dash-card" style="--accent:var(--rule);">
+        <div class="dash-icon">${DASH_ICONS.home}</div>
+        <div class="lab">Home Cash Balance</div>
+        <div class="val">${fmt(homeCashNet)}</div>
+        <div class="sub">Cash currently held at home</div>
+      </div>`;
+
+    // ---- bank balances ----
+    const bankKeys = await storageList('bank:', false);
+    const bankResults = await Promise.all(bankKeys.map(k => storageGet(k, false)));
+    const bankEntries = [];
+    bankResults.forEach((r,i)=>{ if(r && r.value){ try{ const v = JSON.parse(r.value); v._key = bankKeys[i]; bankEntries.push(v); }catch(e){} } });
+
+    const bankLatestDate = {};
+    bankEntries.forEach(e=>{
+      if(!bankLatestDate[e.bankName] || e.date > bankLatestDate[e.bankName]) bankLatestDate[e.bankName] = e.date;
+    });
+    const bankClosing = {};
+    Object.entries(bankLatestDate).forEach(([bankName, latestDate])=>{
+      const closing = calcBankTrueClosing(bankName, latestDate, bankEntries);
+      if(closing !== null) bankClosing[bankName] = { date: latestDate, closing };
+    });
+    const totalBankBalance = Object.values(bankClosing).reduce((s,v)=>s+v.closing, 0);
+    const bankNames = Object.keys(bankClosing);
+
+    if(bankNames.length === 0){
+      bankArea.innerHTML = '<div class="dash-empty">No bank entries yet — add one from Bank Setup / Bank Entry.</div>';
+    } else {
+      const bankCardsHtml = bankNames.map((name, i)=>{
+        const info = bankClosing[name];
+        const accent = DASH_PALETTE[i % DASH_PALETTE.length];
+        return `
+        <div class="dash-card" style="--accent:${accent};">
+          <div class="dash-icon">${DASH_ICONS.bank}</div>
+          <div class="lab">${escapeHtml(name)}</div>
+          <div class="val">${fmt(info.closing)}</div>
+          <div class="sub">As of ${niceDate(info.date)}</div>
+        </div>`;
+      }).join('');
+      bankArea.innerHTML = bankCardsHtml + `
+        <div class="dash-card dark">
+          <div class="dash-icon">${DASH_ICONS.stack}</div>
+          <div class="lab">Total Bank Balance</div>
+          <div class="val">${fmt(totalBankBalance)}</div>
+          <div class="sub">${bankNames.length} account${bankNames.length===1?'':'s'}</div>
+        </div>`;
+    }
+  }
+
+  $('dashDayReportBtn').addEventListener('click', ()=>{
+    document.querySelector('.tab-btn[data-tab="day"]').click();
+  });
+  $('dashBankDayReportBtn').addEventListener('click', ()=>{
+    document.querySelector('.tab-btn[data-tab="bank-day"]').click();
+  });
+
   /* ---------------- init ---------------- */
   (function init(){
     const t = todayISO();
     $('entryDate').value = t;
+    loadDashboard();
     $('dayReportDate').value = t;
     $('monthReportMonth').value = t.slice(0,7);
     loadEntryIntoForm(t);
