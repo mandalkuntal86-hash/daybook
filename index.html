@@ -4,6 +4,14 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Daily Cash Book</title>
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png" />
+<link rel="apple-touch-icon" href="apple-touch-icon.png" />
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#1B4332" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Cash Book" />
+
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700;9..144,800&family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
 
@@ -89,22 +97,16 @@
   .brand-block{display:flex; align-items:center; gap:16px;}
   .ledger-mark{
     width:50px;height:50px;flex:none;
-    background:linear-gradient(155deg, var(--leather-light), var(--leather-dark));
-    border-radius:4px;
+    background:#FFFFFF;
+    border-radius:10px;
     position:relative;
     box-shadow: inset 0 0 0 1px rgba(201,154,62,.45), 0 3px 8px rgba(36,27,18,.3);
+    display:flex; align-items:center; justify-content:center;
+    padding:5px;
+    overflow:hidden;
   }
-  .ledger-mark::before, .ledger-mark::after{
-    content:'';
-    position:absolute; left:11px; right:11px; height:1.5px;
-    background:rgba(246,239,220,.65);
-  }
-  .ledger-mark::before{top:18px;}
-  .ledger-mark::after{top:29px;}
-  .ledger-mark span{
-    position:absolute; left:11px; top:8px; width:6px; height:6px;
-    border-radius:50%; background:var(--gold-bright);
-    box-shadow:0 0 0 2px rgba(201,154,62,.25);
+  .ledger-mark img{
+    width:100%; height:100%; object-fit:contain; display:block;
   }
   .masthead-text{display:flex; flex-direction:column;}
   .eyebrow{
@@ -581,7 +583,7 @@
 
   <header class="top">
     <div class="brand-block">
-      <div class="ledger-mark"><span></span></div>
+      <div class="ledger-mark"><img alt="Digital Rupee" src="icon-512.png" /></div>
       <div class="masthead-text">
         <div class="eyebrow">Register No. 1 · Cash Account</div>
         <h1>Daily Cash Book</h1>
@@ -3007,6 +3009,13 @@
     loadBankDayReport(t);
     loadBankMonthReport(t.slice(0,7));
   })();
+</script>
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('service-worker.js').catch(err => console.warn('SW registration failed', err));
+  });
+}
 </script>
 </body>
 </html>
