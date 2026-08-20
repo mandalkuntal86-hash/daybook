@@ -2173,10 +2173,24 @@
     if(!key.startsWith('bank:')) return null;
     const rest = key.slice(5);
     const date = rest.slice(0, 10);
-    let bankName = rest.slice(11);
+    let tail = rest.slice(11);
     let isContra = false;
-    if(bankName.endsWith(':contra')){ isContra = true; bankName = bankName.slice(0, -7); }
-    return {date, bankName, isContra};
+    let bankName = tail;
+    let sourceBank = '';
+    // New format: "BankName:contra:SourceBank" — lets a bank receive incoming
+    // transfers from multiple different source banks on the same day without
+    // one overwriting another. Old format "BankName:contra" (no source) is
+    // still recognized so previously-saved data keeps working.
+    const contraIdx = tail.indexOf(':contra:');
+    if(contraIdx !== -1){
+      isContra = true;
+      bankName = tail.slice(0, contraIdx);
+      sourceBank = tail.slice(contraIdx + 8);
+    } else if(tail.endsWith(':contra')){
+      isContra = true;
+      bankName = tail.slice(0, -7);
+    }
+    return {date, bankName, isContra, sourceBank};
   }
 
   /* Find the most recent prior saved entry for this bank (before the given date)
@@ -2201,9 +2215,21 @@
     if(res && res.value){
       try{ const v = JSON.parse(res.value); return {date: mostRecentDate, closingBalance: num(v.closingBalance)}; }catch(e){}
     }
-    const contraRes = await storageGet(regularKey + ':contra', false);
-    if(contraRes && contraRes.value){
-      try{ const v = JSON.parse(contraRes.value); return {date: mostRecentDate, closingBalance: num(v.closingBalance)}; }catch(e){}
+    const contraKeys = await storageList(regularKey + ':contra', false);
+    if(contraKeys && contraKeys.length){
+      const contraResults = await Promise.all(contraKeys.map(k => storageGet(k, false)));
+      let opening = null, incomingTotal = 0, any = false;
+      contraResults.forEach(r=>{
+        if(r && r.value){
+          try{
+            const v = JSON.parse(r.value);
+            if(opening === null) opening = num(v.openingBalance);
+            incomingTotal += num(v.collection);
+            any = true;
+          }catch(e){}
+        }
+      });
+      if(any) return {date: mostRecentDate, closingBalance: (opening || 0) + incomingTotal};
     }
     return null;
   }
@@ -2220,17 +2246,25 @@
       return false;
     }
     const key = 'bank:' + date + ':' + bankName;
-    const contraKey = key + ':contra';
-    // Also look for an auto-generated incoming-transfer mirror on this same
-    // date+bank — it lives under a separate ":contra" key, so the normal
-    // lookup above would otherwise miss money that's already arrived today.
-    // It stays a separate record (it's genuinely a transfer, not a Collection),
-    // but its amount still needs to be visible and counted in Closing Balance.
-    const [res, contraRes] = await Promise.all([storageGet(key, false), storageGet(contraKey, false)]);
-    let contraV = null;
-    if(contraRes && contraRes.value){ try{ contraV = JSON.parse(contraRes.value); }catch(e){ contraV = null; } }
-    const incoming = contraV ? num(contraV.collection) : 0;
-    const incomingSource = contraV ? (contraV.contraBank || '') : '';
+    const contraPrefix = key + ':contra';
+    // Also look for auto-generated incoming-transfer mirrors on this same
+    // date+bank — they live under separate ":contra:<sourceBank>" keys (one per
+    // source bank, so several transfers in on the same day don't overwrite
+    // each other), so the normal lookup above would otherwise miss money
+    // that's already arrived today. They stay separate records (genuinely
+    // transfers, not Collection), but their amounts still need to be visible
+    // and counted in Closing Balance.
+    const [res, contraKeys] = await Promise.all([storageGet(key, false), storageList(contraPrefix, false)]);
+    let contraVs = [];
+    if(contraKeys && contraKeys.length){
+      const contraResults = await Promise.all(contraKeys.map(k => storageGet(k, false)));
+      contraResults.forEach(r=>{
+        if(r && r.value){ try{ const v = JSON.parse(r.value); if(num(v.collection) > 0) contraVs.push(v); }catch(e){} }
+      });
+    }
+    const contraV = contraVs.length ? contraVs[0] : null; // kept for any code below expecting a single mirror
+    const incoming = contraVs.reduce((s,v)=>s+num(v.collection), 0);
+    const incomingSource = contraVs.map(v=>v.contraBank || '').filter(Boolean).join(', ');
 
     if(res && res.value){
       let v;
@@ -2317,7 +2351,8 @@
     const prevContraBank = loadedBankEntrySnapshot ? (loadedBankEntrySnapshot.contraBank || '') : '';
     const prevContraAmount = loadedBankEntrySnapshot ? num(loadedBankEntrySnapshot.contraAmount) : 0;
     if(prevContraBank && prevContraAmount > 0 && (prevContraBank !== entry.contraBank || !(entry.contraAmount > 0))){
-      await storageDelete('bank:' + date + ':' + prevContraBank + ':contra', false);
+      await storageDelete('bank:' + date + ':' + prevContraBank + ':contra:' + bankName, false);
+      await storageDelete('bank:' + date + ':' + prevContraBank + ':contra', false); // legacy key, in case an old-format mirror is still there
     }
 
     const result = await storageSet('bank:' + date + ':' + bankName, JSON.stringify(entry), false);
@@ -2329,24 +2364,40 @@
       // we must use that existing entry's opening balance and fold the contra amount
       // into its closing — otherwise the closing is wrong when entry order differs.
       const recvRegularKey = 'bank:' + date + ':' + entry.contraBank;
-      const recvRegularRes = await storageGet(recvRegularKey, false);
+      const otherMirrorPrefix = 'bank:' + date + ':' + entry.contraBank + ':contra';
+      const [recvRegularRes, otherMirrorKeysRaw] = await Promise.all([
+        storageGet(recvRegularKey, false),
+        storageList(otherMirrorPrefix, false)
+      ]);
+      // Sum any OTHER already-saved incoming transfers into this same bank, same
+      // day, from OTHER source banks — so this bank can receive several contra
+      // transfers in one day (e.g. HDFC→UCO and ICICI→UCO) without one wiping
+      // out the other, and the stored figures stay consistent.
+      const otherMirrorKeys = (otherMirrorKeysRaw || []).filter(k => k !== ('bank:' + date + ':' + entry.contraBank + ':contra:' + bankName));
+      let otherIncomingTotal = 0;
+      if(otherMirrorKeys.length){
+        const otherMirrorResults = await Promise.all(otherMirrorKeys.map(k => storageGet(k, false)));
+        otherMirrorResults.forEach(r=>{
+          if(r && r.value){ try{ otherIncomingTotal += num(JSON.parse(r.value).collection); }catch(e){} }
+        });
+      }
       let recvOpening = 0;
       let mirrorClosing;
       if(recvRegularRes && recvRegularRes.value){
         try{
           const recvExisting = JSON.parse(recvRegularRes.value);
           recvOpening = num(recvExisting.openingBalance);
-          // Recalculate the existing entry's closing to include the incoming contra amount
+          // Recalculate the existing entry's closing to include ALL incoming contra amounts
           const recvPaymentTotal = (recvExisting.payees||[]).reduce((s,p)=>s+num(p.amount),0);
-          mirrorClosing = (recvOpening + num(recvExisting.collection) + num(recvExisting.cashDeposit) + entry.contraAmount) - (recvPaymentTotal + num(recvExisting.contraAmount));
+          mirrorClosing = (recvOpening + num(recvExisting.collection) + num(recvExisting.cashDeposit) + entry.contraAmount + otherIncomingTotal) - (recvPaymentTotal + num(recvExisting.contraAmount));
           // Also update the regular entry's stored closing so it stays in sync
           recvExisting.closingBalance = mirrorClosing;
           await storageSet(recvRegularKey, JSON.stringify(recvExisting), false);
-        }catch(e){ recvOpening = 0; mirrorClosing = entry.contraAmount; }
+        }catch(e){ recvOpening = 0; mirrorClosing = entry.contraAmount + otherIncomingTotal; }
       } else {
         const recvPrev = await findPreviousBankClosing(entry.contraBank, date);
         recvOpening = recvPrev !== null ? recvPrev.closingBalance : 0;
-        mirrorClosing = recvOpening + entry.contraAmount;
+        mirrorClosing = recvOpening + entry.contraAmount + otherIncomingTotal;
       }
       const contraEntry = {
         date, bankName: entry.contraBank, accountNumber: '',
@@ -2357,7 +2408,22 @@
         narration: 'Contra transfer from ' + bankName + (entry.narration ? ' — ' + entry.narration : ''),
         closingBalance: mirrorClosing, savedAt: new Date().toISOString()
       };
-      await storageSet('bank:' + date + ':' + entry.contraBank + ':contra', JSON.stringify(contraEntry), false);
+      // Keyed by source bank too, so a second transfer from a different bank
+      // into the same destination on the same day gets its own slot instead
+      // of overwriting the first one.
+      await storageSet('bank:' + date + ':' + entry.contraBank + ':contra:' + bankName, JSON.stringify(contraEntry), false);
+      // If a legacy no-source-tagged key exists AND it was this same source→
+      // destination transfer, replace it with the new source-tagged key so it
+      // isn't double-counted. Leave it alone if it belongs to a different
+      // source bank (a still-valid legacy mirror we must not delete).
+      const legacyKey = 'bank:' + date + ':' + entry.contraBank + ':contra';
+      const legacyRes = await storageGet(legacyKey, false);
+      if(legacyRes && legacyRes.value){
+        try{
+          const legacyV = JSON.parse(legacyRes.value);
+          if((legacyV.contraBank || '') === bankName){ await storageDelete(legacyKey, false); }
+        }catch(e){}
+      }
     }
 
     if(result){
@@ -2383,7 +2449,8 @@
     if(!confirm('Delete the saved bank entry for ' + bankName + ' on ' + niceDate(date) + '? This cannot be undone.')) return;
     // Also remove the auto-generated mirror on the other bank, if this entry had a contra transfer.
     if(loadedBankEntrySnapshot && loadedBankEntrySnapshot.contraBank && num(loadedBankEntrySnapshot.contraAmount) > 0){
-      await storageDelete('bank:' + date + ':' + loadedBankEntrySnapshot.contraBank + ':contra', false);
+      await storageDelete('bank:' + date + ':' + loadedBankEntrySnapshot.contraBank + ':contra:' + bankName, false);
+      await storageDelete('bank:' + date + ':' + loadedBankEntrySnapshot.contraBank + ':contra', false); // legacy key
     }
     await storageDelete('bank:' + date + ':' + bankName, false);
     showBankEntryStatus('Deleted bank entry for ' + bankName + ' on ' + niceDate(date) + '.', false);
@@ -2423,17 +2490,19 @@
         e.bankName === bankName && e.date === onDate &&
         !(!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0))
       );
-      const mirror = pool.find(e =>
+      const mirrors = pool.filter(e =>
         e.bankName === bankName && e.date === onDate &&
         (!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0))
       );
       if(reg){
         const paymentTotal = (reg.payees||[]).reduce((s,p)=>s+num(p.amount),0);
-        const incomingContra = mirror ? num(mirror.collection) : 0;
+        const incomingContra = mirrors.reduce((s,m)=>s+num(m.collection), 0);
         return num(reg.openingBalance) + num(reg.collection) + num(reg.cashDeposit)
                + incomingContra - paymentTotal - num(reg.contraAmount);
-      } else if(mirror){
-        return num(mirror.closingBalance);
+      } else if(mirrors.length){
+        const opening = num(mirrors[0].openingBalance);
+        const incomingContra = mirrors.reduce((s,m)=>s+num(m.collection), 0);
+        return opening + incomingContra;
       }
       return null;
     }
@@ -2469,27 +2538,27 @@
       const regulars = bankEntries.filter(e => !(!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0)));
       const mirrors  = bankEntries.filter(e =>   !!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0));
 
-      const mirrorBySource = {}; // key: sourceBank name → mirror entry
-      mirrors.forEach(m=>{ if(m.contraBank) mirrorBySource[m.contraBank] = m; });
-
       const rows = [];
 
       if(regulars.length > 0){
-        // For each regular entry, check if this bank also has an incoming mirror
+        // For each regular entry, gather ALL incoming mirrors for this bank —
+        // a bank can receive same-day transfers from several different source
+        // banks (e.g. HDFC→UCO and ICICI→UCO), so this must not stop at one.
         regulars.forEach(reg => {
-          // Find a mirror entry on this bank whose contraBank (= the source bank) is NOT this bank
-          // i.e. this bank is the *destination* of a transfer, so there's an incoming mirror for it.
-          // The mirror entry for THIS bank lives as a ":contra" record under this bank's name.
-          // We detect it: isMirror entries whose contraBank is the source bank (another bank sent money here).
-          const incomingMirror = mirrors.find(m => m.bankName === reg.bankName);
-          rows.push({ reg, incomingMirror: incomingMirror || null });
+          const incomingMirrors = mirrors.filter(m => m.bankName === reg.bankName);
+          rows.push({ reg, incomingMirrors });
         });
-        // Any mirrors not paired with a regular (bank only received a transfer, no own entry)
-        const pairedMirrors = new Set(rows.filter(r=>r.incomingMirror).map(r=>r.incomingMirror));
-        mirrors.filter(m=>!pairedMirrors.has(m)).forEach(m=>{ rows.push({ reg: null, incomingMirror: m }); });
+        // Any mirrors not paired with a regular (bank only received transfer(s), no own entry)
+        const pairedBanks = new Set(rows.map(r=>r.reg.bankName));
+        const unpaired = mirrors.filter(m => !pairedBanks.has(m.bankName));
+        const unpairedByBank = {};
+        unpaired.forEach(m=>{ (unpairedByBank[m.bankName] = unpairedByBank[m.bankName] || []).push(m); });
+        Object.values(unpairedByBank).forEach(ms => rows.push({ reg: null, incomingMirrors: ms }));
       } else {
-        // No regular entry at all — show each mirror as its own row
-        mirrors.forEach(m=>{ rows.push({ reg: null, incomingMirror: m }); });
+        // No regular entry at all — group all mirrors for this bank into one row
+        const byDestBank = {};
+        mirrors.forEach(m=>{ (byDestBank[m.bankName] = byDestBank[m.bankName] || []).push(m); });
+        Object.values(byDestBank).forEach(ms => rows.push({ reg: null, incomingMirrors: ms }));
       }
       return rows;
     }
@@ -2516,7 +2585,8 @@
         return acc;
       }, {collection:0, payment:0, deposit:0, contra:0});
 
-      const rowsHtml = displayRows.map(({reg, incomingMirror})=>{
+      const rowsHtml = displayRows.map(({reg, incomingMirrors})=>{
+        const mirrors = (incomingMirrors || []).filter(m => num(m.collection) > 0);
         // --- Merged row: prefer the regular entry as the base; overlay incoming mirror info ---
         if(reg){
           const paymentTotal = (reg.payees||[]).reduce((s,p)=>s+num(p.amount),0);
@@ -2524,32 +2594,31 @@
 
           // Outgoing contra (from the regular entry itself)
           const hasOutgoing = reg.contraBank && num(reg.contraAmount) > 0;
-          // Incoming contra (from the mirror, if paired)
-          const hasIncoming = incomingMirror && num(incomingMirror.collection) > 0;
+          // Incoming contra (from one or more mirrors, if any — several source
+          // banks can each send a transfer into this bank on the same day)
+          const hasIncoming = mirrors.length > 0;
 
-          // Build the Contra Bank cell: show OUT first (if any), then IN (if any), separated
+          // Build the Contra Bank cell: show OUT first (if any), then every IN line
           let contraBankCell = '—';
           let contraAmtCell = '—';
-          if(hasOutgoing && hasIncoming){
-            contraBankCell = `<span class="tag-out">OUT</span> ${escapeHtml(reg.contraBank)}<br><span class="tag-in">IN</span> ${escapeHtml(incomingMirror.contraBank)}`;
-            contraAmtCell = `${fmt(reg.contraAmount)}<br>${fmt(incomingMirror.collection)}`;
-          } else if(hasOutgoing){
-            contraBankCell = `<span class="tag-out">OUT</span><br>${escapeHtml(reg.contraBank)}`;
-            contraAmtCell = fmt(reg.contraAmount);
-          } else if(hasIncoming){
-            contraBankCell = `<span class="tag-in">IN</span><br>${escapeHtml(incomingMirror.contraBank)}`;
-            contraAmtCell = fmt(incomingMirror.collection);
+          const outLine = hasOutgoing ? `<span class="tag-out">OUT</span> ${escapeHtml(reg.contraBank)}` : '';
+          const outAmt = hasOutgoing ? fmt(reg.contraAmount) : '';
+          const inLines = mirrors.map(m => `<span class="tag-in">IN</span> ${escapeHtml(m.contraBank)}`);
+          const inAmts = mirrors.map(m => fmt(m.collection));
+          if(hasOutgoing || hasIncoming){
+            contraBankCell = [outLine, ...inLines].filter(Boolean).join('<br>');
+            contraAmtCell = [outAmt, ...inAmts].filter(Boolean).join('<br>');
           }
 
           // Correct closing: opening + collection + cashDeposit + incomingContra - payments - outgoingContra
-          const incomingContraAmt = hasIncoming ? num(incomingMirror.collection) : 0;
+          const incomingContraAmt = mirrors.reduce((s,m)=>s+num(m.collection), 0);
           const correctClosing = num(reg.openingBalance) + num(reg.collection) + num(reg.cashDeposit)
                                  + incomingContraAmt - paymentTotal - num(reg.contraAmount);
 
           const actionsHtml = `<div class="row-actions">
             <button class="icon-btn sm edit edit-bank-entry" type="button" data-date="${date}" data-bank="${escapeHtml(bank)}" title="Edit">✎</button>
             <button class="icon-btn sm delete-bank-entry" type="button" data-key="${reg._key}" data-date="${date}" title="Delete">×</button>
-            ${incomingMirror ? `<button class="icon-btn sm delete-bank-entry" type="button" data-key="${incomingMirror._key}" data-date="${date}" title="Delete incoming transfer">×</button>` : ''}
+            ${mirrors.map(m=>`<button class="icon-btn sm delete-bank-entry" type="button" data-key="${m._key}" data-date="${date}" title="Delete incoming transfer from ${escapeHtml(m.contraBank||'')}">×</button>`).join('')}
           </div>`;
 
           return `<tr>
@@ -2564,20 +2633,26 @@
             <td>${actionsHtml}</td>
           </tr>`;
         } else {
-          // Only a mirror entry — no regular entry for this bank today
-          const m = incomingMirror;
+          // Only mirror entries — no regular entry for this bank today.
+          // Merge all of them into a single row (opening is the same for all,
+          // since it comes from the previous day's closing).
+          if(mirrors.length === 0) return '';
+          const opening = num(mirrors[0].openingBalance);
+          const totalIncoming = mirrors.reduce((s,m)=>s+num(m.collection), 0);
+          const contraBankCell = mirrors.map(m=>`<span class="tag-in">IN</span> ${escapeHtml(m.contraBank||'')}`).join('<br>');
+          const contraAmtCell = mirrors.map(m=>fmt(m.collection)).join('<br>');
           const actionsHtml = `<div class="row-actions">
-            <button class="icon-btn sm delete-bank-entry" type="button" data-key="${m._key}" data-date="${date}" title="Delete contra entry">×</button>
+            ${mirrors.map(m=>`<button class="icon-btn sm delete-bank-entry" type="button" data-key="${m._key}" data-date="${date}" title="Delete contra entry from ${escapeHtml(m.contraBank||'')}">×</button>`).join('')}
           </div>`;
           return `<tr>
-            <td>${fmt(m.openingBalance)}</td>
+            <td>${fmt(opening)}</td>
             <td>—</td>
             <td>—</td>
             <td>—</td>
-            <td><span class="tag-in">IN</span><br>${escapeHtml(m.contraBank||'')}</td>
-            <td>${fmt(m.collection)}</td>
-            <td>${fmt(m.cashDeposit)}</td>
-            <td>${fmt(m.closingBalance)}</td>
+            <td>${contraBankCell}</td>
+            <td>${contraAmtCell}</td>
+            <td>${fmt(0)}</td>
+            <td>${fmt(opening + totalIncoming)}</td>
             <td>${actionsHtml}</td>
           </tr>`;
         }
@@ -2622,7 +2697,8 @@
     if(!checkEditPassword('delete this bank entry', (msg)=>alert(msg))) return;
     if(!confirm('Delete this bank entry? This cannot be undone.')) return;
 
-    if(key.endsWith(':contra')){
+    const parsedKey = parseBankKey(key);
+    if(parsedKey && parsedKey.isContra){
       const res = await storageGet(key, false);
       if(res && res.value){
         try{
@@ -2650,7 +2726,10 @@
         try{
           const v = JSON.parse(res.value);
           if(v.contraBank && num(v.contraAmount) > 0){
-            await storageDelete('bank:' + date + ':' + v.contraBank + ':contra', false);
+            // v.bankName is this (source) entry's own bank — delete only its
+            // own mirror on the destination bank, not any other bank's.
+            await storageDelete('bank:' + date + ':' + v.contraBank + ':contra:' + v.bankName, false);
+            await storageDelete('bank:' + date + ':' + v.contraBank + ':contra', false); // legacy key
           }
         }catch(e){}
       }
@@ -2715,17 +2794,19 @@
         e.bankName === bankName && e.date === onDate &&
         !(!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0))
       );
-      const mirror = pool.find(e =>
+      const mirrors = pool.filter(e =>
         e.bankName === bankName && e.date === onDate &&
         (!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0))
       );
       if(reg){
         const paymentTotal = (reg.payees||[]).reduce((s,p)=>s+num(p.amount),0);
-        const incomingContra = mirror ? num(mirror.collection) : 0;
+        const incomingContra = mirrors.reduce((s,m)=>s+num(m.collection), 0);
         return num(reg.openingBalance) + num(reg.collection) + num(reg.cashDeposit)
                + incomingContra - paymentTotal - num(reg.contraAmount);
-      } else if(mirror){
-        return num(mirror.closingBalance);
+      } else if(mirrors.length){
+        const opening = num(mirrors[0].openingBalance);
+        const incomingContra = mirrors.reduce((s,m)=>s+num(m.collection), 0);
+        return opening + incomingContra;
       }
       return null;
     }
@@ -2743,13 +2824,14 @@
     const rowsHtml = entries.filter(e =>
       !(!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0))
     ).map(e=>{
-      const mirror = entries.find(m =>
+      const mirrors = entries.filter(m =>
         m.bankName === e.bankName && m.date === e.date &&
-        (!!m.isMirror || (m.contraBank && num(m.contraAmount)===0 && num(m.collection)>0))
+        (!!m.isMirror || (m.contraBank && num(m.contraAmount)===0 && num(m.collection)>0)) &&
+        num(m.collection) > 0
       );
       const paymentTotal = (e.payees||[]).reduce((s,p)=>s+num(p.amount),0);
-      const hasIncoming = mirror && num(mirror.collection) > 0;
-      const incomingContra = hasIncoming ? num(mirror.collection) : 0;
+      const hasIncoming = mirrors.length > 0;
+      const incomingContra = mirrors.reduce((s,m)=>s+num(m.collection), 0);
       const correctClosing = num(e.openingBalance) + num(e.collection) + num(e.cashDeposit)
                              + incomingContra - paymentTotal - num(e.contraAmount);
 
@@ -2758,10 +2840,10 @@
         : '—';
       let contraAmtCell = e.contraBank ? fmt(e.contraAmount) : '—';
       if(hasIncoming){
-        contraBankCell += (e.contraBank ? '<br>' : '') +
-          `<span class="tag-in">IN</span><br>${escapeHtml(mirror.contraBank||'')}`;
-        contraAmtCell += (e.contraBank ? '<br>' : '') + fmt(incomingContra);
-        if(!e.contraBank){ contraBankCell = `<span class="tag-in">IN</span><br>${escapeHtml(mirror.contraBank||'')}`; contraAmtCell = fmt(incomingContra); }
+        const inLines = mirrors.map(m => `<span class="tag-in">IN</span> ${escapeHtml(m.contraBank||'')}`).join('<br>');
+        const inAmts = mirrors.map(m => fmt(num(m.collection))).join('<br>');
+        contraBankCell = e.contraBank ? (contraBankCell + '<br>' + inLines) : inLines;
+        contraAmtCell = e.contraBank ? (contraAmtCell + '<br>' + inAmts) : inAmts;
       }
 
       return `<tr>
@@ -2882,17 +2964,19 @@
       e.bankName === bankName && e.date === onDate &&
       !(!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0))
     );
-    const mirror = pool.find(e =>
+    const mirrors = pool.filter(e =>
       e.bankName === bankName && e.date === onDate &&
       (!!e.isMirror || (e.contraBank && num(e.contraAmount)===0 && num(e.collection)>0))
     );
     if(reg){
       const paymentTotal = (reg.payees||[]).reduce((s,p)=>s+num(p.amount),0);
-      const incomingContra = mirror ? num(mirror.collection) : 0;
+      const incomingContra = mirrors.reduce((s,m)=>s+num(m.collection), 0);
       return num(reg.openingBalance) + num(reg.collection) + num(reg.cashDeposit)
              + incomingContra - paymentTotal - num(reg.contraAmount);
-    } else if(mirror){
-      return num(mirror.closingBalance);
+    } else if(mirrors.length){
+      const opening = num(mirrors[0].openingBalance);
+      const incomingContra = mirrors.reduce((s,m)=>s+num(m.collection), 0);
+      return opening + incomingContra;
     }
     return null;
   }
