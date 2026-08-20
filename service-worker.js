@@ -1,4 +1,4 @@
-const CACHE_NAME = 'cash-book-shell-v4';
+const CACHE_NAME = 'cash-book-shell-v5';
 const APP_SHELL = [
   './',
   './index.html',
