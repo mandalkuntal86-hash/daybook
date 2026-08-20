@@ -2411,7 +2411,22 @@
       // Keyed by source bank too, so a second transfer from a different bank
       // into the same destination on the same day gets its own slot instead
       // of overwriting the first one.
-      await storageSet('bank:' + date + ':' + entry.contraBank + ':contra:' + bankName, JSON.stringify(contraEntry), false);
+      const mirrorKey = 'bank:' + date + ':' + entry.contraBank + ':contra:' + bankName;
+      await storageSet(mirrorKey, JSON.stringify(contraEntry), false);
+      // SAFETY CHECK: confirm the incoming-transfer record actually landed in
+      // storage. Without this, a transient write failure would leave the
+      // source bank showing "OUT" correctly while the destination bank never
+      // receives its matching "IN" — exactly the kind of silent, hard-to-spot
+      // mismatch that erodes trust in the numbers. Retry once, and if it still
+      // isn't there, tell the user instead of failing silently.
+      let mirrorVerify = await storageGet(mirrorKey, false);
+      if(!mirrorVerify || !mirrorVerify.value){
+        await storageSet(mirrorKey, JSON.stringify(contraEntry), false);
+        mirrorVerify = await storageGet(mirrorKey, false);
+      }
+      if(!mirrorVerify || !mirrorVerify.value){
+        showBankEntryStatus('Saved ' + bankName + ', but the matching incoming transfer record for ' + entry.contraBank + ' failed to save. Please re-open and re-save this entry to retry.', true);
+      }
       // If a legacy no-source-tagged key exists AND it was this same source→
       // destination transfer, replace it with the new source-tagged key so it
       // isn't double-counted. Leave it alone if it belongs to a different
