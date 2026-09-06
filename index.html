@@ -577,6 +577,7 @@
     /* Bank entry item rows */
     .item-row{flex-wrap:wrap;}
   }
+.derived-field{ background:#f0f4ff; color:#33418f; font-weight:600; cursor:not-allowed; }
 </style>
 </head>
 <body>
@@ -634,8 +635,17 @@
           <label for="entryDate">Date</label>
           <input type="date" id="entryDate">
         </div>
+        <div class="field" style="max-width:220px;">
+          <label for="cashInTally">Cash In Tally (₹)</label>
+          <input type="number" id="cashInTally" step="0.01" placeholder="optional">
+        </div>
         <div class="field" style="flex:2; align-self:flex-end;">
           <div class="hint" id="entryLoadHint">&nbsp;</div>
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field" style="flex:1;">
+          <div class="hint" id="tallyHint">If filled, Today's Cash Sale &amp; Receipt is auto-calculated as Cash In Tally − (Opening Balance + Cash Received From Home).</div>
         </div>
       </div>
 
@@ -1239,6 +1249,30 @@
     $(id).addEventListener('input', recalcLive);
   });
 
+  // Cash In Tally: when filled, auto-derive Today's Cash Sale & Receipt In Cash
+  // Today Cash Sale = Cash In Tally - (Opening Balance + Cash Received From Home)
+  function applyTallyDerivedSale(){
+    const tallyRaw = $('cashInTally').value;
+    if(tallyRaw === '' || tallyRaw === null){
+      $('todaySale').readOnly = false;
+      $('todaySale').classList.remove('derived-field');
+      return;
+    }
+    const tally = num(tallyRaw);
+    const opening = num($('openingBalance').value);
+    const fromHome = num($('cashFromHome').value);
+    const derivedSale = tally - (opening + fromHome);
+    $('todaySale').value = derivedSale;
+    $('todaySale').readOnly = true;
+    $('todaySale').classList.add('derived-field');
+    recalcLive();
+  }
+
+  $('cashInTally').addEventListener('input', applyTallyDerivedSale);
+  ['openingBalance','cashFromHome'].forEach(id=>{
+    $(id).addEventListener('input', applyTallyDerivedSale);
+  });
+
   function entryKey(dateIso){ return 'entry:' + dateIso; }
 
   async function findPreviousClosing(beforeDateIso){
@@ -1274,8 +1308,10 @@
       if(v){
         $('openingBalance').value = v.openingBalance ?? 0;
         $('cashFromHome').value = v.cashReceivedFromHome ?? 0;
+        $('cashInTally').value = v.cashInTally ?? '';
         $('todaySale').value = v.todayCashSale ?? 0;
         $('cashToHome').value = v.cashSendToHome ?? 0;
+        applyTallyDerivedSale();
         setDenomGrid(v.cashSendToHomeDenomination || []);
         (v.expenses && v.expenses.length ? v.expenses : [{}]).forEach(e=>{
           addExpenseRow(e.type || 'expense', e.category || e.label || '', (e.amount ?? ''), e.narration || '');
@@ -1301,7 +1337,10 @@
     const prev = await findPreviousClosing(dateIso);
     $('openingBalance').value = prev !== null ? prev.closingBalance.toFixed(2) : 0;
     $('cashFromHome').value = 0;
+    $('cashInTally').value = '';
     $('todaySale').value = 0;
+    $('todaySale').readOnly = false;
+    $('todaySale').classList.remove('derived-field');
     $('cashToHome').value = 0;
     clearDenomGrid();
     $('entryLoadHint').textContent = prev !== null
@@ -1336,7 +1375,10 @@
   function blankEntryForm(){
     $('openingBalance').value = 0;
     $('cashFromHome').value = 0;
+    $('cashInTally').value = '';
     $('todaySale').value = 0;
+    $('todaySale').readOnly = false;
+    $('todaySale').classList.remove('derived-field');
     clearExpenseRows();
     addExpenseRow('expense', '', '', '');
     clearDepositRows();
@@ -1360,6 +1402,8 @@
     const opening = num($('openingBalance').value);
     const fromHome = num($('cashFromHome').value);
     const sale = num($('todaySale').value);
+    const tallyRaw = $('cashInTally').value;
+    const cashInTally = tallyRaw === '' ? null : num(tallyRaw);
     const expenses = getExpenseList();
     const deposits = getDepositList();
     const deposit = getDepositTotal();
@@ -1370,6 +1414,7 @@
       date: dateIso,
       openingBalance: opening,
       cashReceivedFromHome: fromHome,
+      cashInTally: cashInTally,
       todayCashSale: sale,
       expenses: expenses,
       deposits: deposits,
