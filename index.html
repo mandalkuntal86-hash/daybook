@@ -645,7 +645,7 @@
       </div>
       <div class="field-row">
         <div class="field" style="flex:1;">
-          <div class="hint" id="tallyHint">If filled, Today's Cash Sale &amp; Receipt is auto-calculated as Cash In Tally − (Opening Balance + Cash Received From Home).</div>
+          <div class="hint" id="tallyHint">If filled, Today's Cash Sale &amp; Receipt is auto-calculated as (Cash In Tally − (Opening Balance + Cash Received From Home)) + Total Expense + Deposit.</div>
         </div>
       </div>
 
@@ -1233,9 +1233,25 @@
   function recalcLive(){
     const opening = num($('openingBalance').value);
     const fromHome = num($('cashFromHome').value);
-    const sale = num($('todaySale').value);
     const expenses = getExpenseList();
     const deposit = getDepositTotal();
+
+    // Cash In Tally: when filled, auto-derive Today's Cash Sale & Receipt In Cash as:
+    // (Cash In Tally - (Opening Balance + Cash Received From Home)) + Total Expense + Deposit
+    const tallyRaw = $('cashInTally').value;
+    if(tallyRaw !== '' && tallyRaw !== null){
+      const tally = num(tallyRaw);
+      const expenseSumForTally = expenses.reduce((s,e)=>s+num(e.amount),0);
+      const derivedSale = (tally - (opening + fromHome)) + expenseSumForTally + deposit;
+      $('todaySale').value = derivedSale;
+      $('todaySale').readOnly = true;
+      $('todaySale').classList.add('derived-field');
+    } else {
+      $('todaySale').readOnly = false;
+      $('todaySale').classList.remove('derived-field');
+    }
+
+    const sale = num($('todaySale').value);
     const toHome = num($('cashToHome').value);
     const t = computeTotals(opening, fromHome, sale, expenses, deposit, toHome);
     $('sumTotalCash').textContent = fmt(t.totalCash);
@@ -1245,32 +1261,8 @@
     $('depositRunningTotal').textContent = fmt(deposit);
   }
 
-  ['openingBalance','cashFromHome','todaySale'].forEach(id=>{
+  ['openingBalance','cashFromHome','todaySale','cashInTally'].forEach(id=>{
     $(id).addEventListener('input', recalcLive);
-  });
-
-  // Cash In Tally: when filled, auto-derive Today's Cash Sale & Receipt In Cash
-  // Today Cash Sale = Cash In Tally - (Opening Balance + Cash Received From Home)
-  function applyTallyDerivedSale(){
-    const tallyRaw = $('cashInTally').value;
-    if(tallyRaw === '' || tallyRaw === null){
-      $('todaySale').readOnly = false;
-      $('todaySale').classList.remove('derived-field');
-      return;
-    }
-    const tally = num(tallyRaw);
-    const opening = num($('openingBalance').value);
-    const fromHome = num($('cashFromHome').value);
-    const derivedSale = tally - (opening + fromHome);
-    $('todaySale').value = derivedSale;
-    $('todaySale').readOnly = true;
-    $('todaySale').classList.add('derived-field');
-    recalcLive();
-  }
-
-  $('cashInTally').addEventListener('input', applyTallyDerivedSale);
-  ['openingBalance','cashFromHome'].forEach(id=>{
-    $(id).addEventListener('input', applyTallyDerivedSale);
   });
 
   function entryKey(dateIso){ return 'entry:' + dateIso; }
@@ -1311,7 +1303,7 @@
         $('cashInTally').value = v.cashInTally ?? '';
         $('todaySale').value = v.todayCashSale ?? 0;
         $('cashToHome').value = v.cashSendToHome ?? 0;
-        applyTallyDerivedSale();
+        recalcLive();
         setDenomGrid(v.cashSendToHomeDenomination || []);
         (v.expenses && v.expenses.length ? v.expenses : [{}]).forEach(e=>{
           addExpenseRow(e.type || 'expense', e.category || e.label || '', (e.amount ?? ''), e.narration || '');
