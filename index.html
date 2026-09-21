@@ -2530,19 +2530,26 @@
       const amount = transactionAmount || moneyValues[0];
       if(!amount || amount < 1) return;
 
-      const hasCreditKeyword = /(credit|deposit|cash\s*in|cash\s*credit|received|refund|salary|interest|inward|credited|cr|deposit\s*amount)/i.test(lower);
-      const hasDebitKeyword = /(debit|withdrawal|withdraw|payment|paid|atm|pos|upi|imps|neft|rtgs|cheque|dd|bill|fee|tax|emi|merchant|purchase|invoice|outward|cash\s*out|transfer|cash\s*out|paid\s*to)/i.test(lower);
+      const hasCreditKeyword = /(credit|deposit|cash\s*in|cash\s*credit|received|refund|salary|interest|inward|credited|deposit\s*amount|received\s*from|\bcr\b)/i.test(lower);
+      const hasDebitKeyword = /(debit|withdrawal|withdraw|payment|paid|atm|pos|cheque|dd|bill|fee|tax|emi|merchant|purchase|invoice|outward|cash\s*out|paid\s*to|(?:upi|imps|neft|rtgs)\s+(?:payment|sent|out|transfer)|(?:transfer|bank\s*transfer)\s+(?:out|to)|\bdr\b)/i.test(lower);
       const hasDrLabel = /\bdr\b/i.test(lower);
       const hasCrLabel = /\bcr\b/i.test(lower);
       const hasWithdrawalColumn = /withdrawal\s*amt|withdrawal|debit|dr/i.test(lower);
       const hasDepositColumn = /deposit\s*amt|credit|deposit|cr/i.test(lower);
 
-      if((hasCreditKeyword || hasCrLabel || (hasDepositColumn && !hasWithdrawalColumn)) && !hasDebitKeyword && !hasDrLabel){
+      const explicitCredit = hasCreditKeyword || hasCrLabel || (hasDepositColumn && !hasWithdrawalColumn);
+      const explicitDebit = hasDebitKeyword || hasDrLabel || hasWithdrawalColumn;
+
+      const isCreditLine = explicitCredit && !explicitDebit;
+      const isDebitLine = explicitDebit && !explicitCredit;
+      const isMixedSignalLine = explicitCredit && explicitDebit;
+
+      if(isCreditLine || (isMixedSignalLine && /credit|deposit|received|salary|refund|interest|cash\s*in|\bcr\b|deposit\s*amount/i.test(lower) && !/debit|withdrawal|withdraw|payment|paid|atm|cash\s*out|outward|\bdr\b|paid\s*to|(?:upi|imps|neft|rtgs)\s+(?:payment|sent|out|transfer)|(?:transfer|bank\s*transfer)\s+(?:out|to)/i.test(lower))){
         totalDeposit += amount;
         return;
       }
 
-      if((hasDebitKeyword || hasDrLabel || hasWithdrawalColumn || (!hasCreditKeyword && !hasCrLabel && !hasDepositColumn && !hasWithdrawalColumn && moneyValues.length >= 2)) && !hasCreditKeyword && !hasCrLabel && !hasDepositColumn){
+      if(isDebitLine || (isMixedSignalLine && !/credit|deposit|received|salary|refund|interest|cash\s*in|\bcr\b|deposit\s*amount/i.test(lower)) || (!explicitCredit && !explicitDebit && moneyValues.length >= 2)){
         const payeeName = cleanPayeeName(line);
         if(payeeName && payeeName.length > 2 && payeeName.length < 80){
           const key = `${payeeName.toLowerCase()}::${amount}`;
@@ -2562,15 +2569,17 @@
         const amount = moneyValues.length > 1 ? moneyValues[moneyValues.length - 2] : moneyValues[0];
         if(!amount) return;
 
-        const isLikelyDeposit = /(credit|deposit|received|cash\s*in|refund|salary|interest)/i.test(lower) || /\bcr\b/i.test(lower) || (/deposit\s*amt/i.test(lower) && !/withdrawal\s*amt|withdrawal|debit|dr/i.test(lower));
-        const isLikelyWithdrawal = /(debit|withdraw|payment|paid|atm|upi|pos|merchant|invoice|bill|cheque|dd|transfer|cash\s*out)/i.test(lower) || /\bdr\b/i.test(lower) || /withdrawal\s*amt/i.test(lower);
+        const isLikelyDeposit = /(credit|deposit|received|cash\s*in|refund|salary|interest|credited)/i.test(lower) || /\bcr\b/i.test(lower) || (/deposit\s*amt/i.test(lower) && !/withdrawal\s*amt|withdrawal|debit|dr|payment|paid|cash\s*out|outward|atm|cheque|dd|sent\s*to|transfer\s*to|bank\s*transfer\s*to|outgoing/i.test(lower));
+        const isLikelyWithdrawal = /(debit|withdraw|payment|paid|atm|pos|merchant|invoice|bill|cheque|dd|cash\s*out|paid\s*to|outward|\bdr\b)/i.test(lower) || /withdrawal\s*amt/i.test(lower) || (/(upi|imps|neft|rtgs|transfer|bank\s*transfer)/i.test(lower) && /(out|sent|payment|withdraw|paid|to\s+[a-z])/i.test(lower));
+        const isFallbackCredit = isLikelyDeposit && !isLikelyWithdrawal;
+        const isFallbackDebit = isLikelyWithdrawal && !isLikelyDeposit;
 
-        if(isLikelyDeposit && !isLikelyWithdrawal){
+        if(isFallbackCredit){
           totalDeposit += amount;
           return;
         }
 
-        if(isLikelyWithdrawal && !isLikelyDeposit){
+        if(isFallbackDebit){
           const payeeName = cleanPayeeName(line);
           if(payeeName && payeeName.length > 2 && payeeName.length < 80){
             const key = `${payeeName.toLowerCase()}::${amount}`;
