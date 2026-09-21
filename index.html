@@ -1092,24 +1092,24 @@
       }
 
       if(isPaymentVoucher && !isContraVoucher){
-        const candidate = entries
+        const candidates = entries
           .filter(entry => {
             const name = (entry.name || '').trim();
             if(!name || /^cash$/i.test(name)) return false;
             if(/^(cgst|sgst|igst|cess|tds|tcs|vat|gst|round(ing)?|sales tax)$/i.test(name)) return false;
-            if(/bank|contra|cash deposit|cash deposited|transfer|home|capital|owner/i.test(name)) return false;
+            if(/bank|contra|cash deposit|cash deposited|transfer|home|capital|drawings?/i.test(name)) return false;
             return true;
           })
-          .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))[0];
+          .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
 
-        if(candidate){
+        candidates.forEach(candidate => {
           expenses.push({
             type: 'expense',
             category: candidate.name,
             amount: Math.abs(candidate.amount),
             narration: narration || candidate.name
           });
-        }
+        });
         return;
       }
 
@@ -2530,26 +2530,32 @@
       const amount = transactionAmount || moneyValues[0];
       if(!amount || amount < 1) return;
 
-      const hasCreditKeyword = /(credit|deposit|cash\s*in|cash\s*credit|received|refund|salary|interest|inward|credited|deposit\s*amount|received\s*from|\bcr\b)/i.test(lower);
-      const hasDebitKeyword = /(debit|withdrawal|withdraw|payment|paid|atm|pos|cheque|dd|bill|fee|tax|emi|merchant|purchase|invoice|outward|cash\s*out|paid\s*to|(?:upi|imps|neft|rtgs)\s+(?:payment|sent|out|transfer)|(?:transfer|bank\s*transfer)\s+(?:out|to)|\bdr\b)/i.test(lower);
-      const hasDrLabel = /\bdr\b/i.test(lower);
-      const hasCrLabel = /\bcr\b/i.test(lower);
-      const hasWithdrawalColumn = /withdrawal\s*amt|withdrawal|debit|dr/i.test(lower);
-      const hasDepositColumn = /deposit\s*amt|credit|deposit|cr/i.test(lower);
+      const hasCreditToken = /(credit|deposit|cash\s*in|cash\s*credit|received|refund|salary|interest|inward|credited|deposit\s*amount|cr\b)/i.test(lower);
+      const hasDebitToken = /(debit|withdrawal|withdraw|payment|paid|atm|pos|cheque|dd|bill|fee|tax|emi|merchant|purchase|invoice|outward|cash\s*out|paid\s*to|dr\b)/i.test(lower);
+      const hasIncomingTransfer = /(upi|imps|neft|rtgs|transfer|bank\s*transfer)/i.test(lower) && /(received|credit|inward|from\s+[a-z])/i.test(lower);
+      const hasOutgoingTransfer = /(upi|imps|neft|rtgs|transfer|bank\s*transfer)/i.test(lower) && /(out|sent|payment|withdraw|paid|to\s+[a-z])/i.test(lower);
 
-      const explicitCredit = hasCreditKeyword || hasCrLabel || (hasDepositColumn && !hasWithdrawalColumn);
-      const explicitDebit = hasDebitKeyword || hasDrLabel || hasWithdrawalColumn;
+      const isDepositLine = hasCreditToken || hasIncomingTransfer;
+      const isWithdrawalLine = hasDebitToken || hasOutgoingTransfer;
 
-      const isCreditLine = explicitCredit && !explicitDebit;
-      const isDebitLine = explicitDebit && !explicitCredit;
-      const isMixedSignalLine = explicitCredit && explicitDebit;
-
-      if(isCreditLine || (isMixedSignalLine && /credit|deposit|received|salary|refund|interest|cash\s*in|\bcr\b|deposit\s*amount/i.test(lower) && !/debit|withdrawal|withdraw|payment|paid|atm|cash\s*out|outward|\bdr\b|paid\s*to|(?:upi|imps|neft|rtgs)\s+(?:payment|sent|out|transfer)|(?:transfer|bank\s*transfer)\s+(?:out|to)/i.test(lower))){
+      if(isDepositLine && !isWithdrawalLine){
         totalDeposit += amount;
         return;
       }
 
-      if(isDebitLine || (isMixedSignalLine && !/credit|deposit|received|salary|refund|interest|cash\s*in|\bcr\b|deposit\s*amount/i.test(lower)) || (!explicitCredit && !explicitDebit && moneyValues.length >= 2)){
+      if(isWithdrawalLine && !isDepositLine){
+        const payeeName = cleanPayeeName(line);
+        if(payeeName && payeeName.length > 2 && payeeName.length < 80){
+          const key = `${payeeName.toLowerCase()}::${amount}`;
+          if(!seen.has(key)){
+            seen.add(key);
+            payees.push({ name: payeeName, amount });
+          }
+        }
+        return;
+      }
+
+      if(!isDepositLine && !isWithdrawalLine && moneyValues.length >= 2){
         const payeeName = cleanPayeeName(line);
         if(payeeName && payeeName.length > 2 && payeeName.length < 80){
           const key = `${payeeName.toLowerCase()}::${amount}`;
