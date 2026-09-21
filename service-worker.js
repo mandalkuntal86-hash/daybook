@@ -1,4 +1,4 @@
-const CACHE_NAME = 'cash-book-shell-v7';
+const CACHE_NAME = 'cash-book-shell-v8';
 const APP_SHELL = [
   './',
   './index.html',
@@ -25,8 +25,8 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// Cache-first for the app shell itself; everything else (Firestore, Google Fonts)
-// goes straight to the network since this app needs a live connection to sync data.
+// Network-first for the app shell so new UI appears on normal startup.
+// Use the cached shell only when the device is offline.
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   const isShellFile = APP_SHELL.some((f) => url.pathname.endsWith(f.replace('./', '/')) || url.pathname === '/' );
