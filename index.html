@@ -3714,8 +3714,19 @@
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script>
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('service-worker.js').catch(err => console.warn('SW registration failed', err));
+  let reloadingForWorkerUpdate = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if(reloadingForWorkerUpdate) return;
+    reloadingForWorkerUpdate = true;
+    window.location.reload();
+  });
+  window.addEventListener('load', async () => {
+    try{
+      const registration = await navigator.serviceWorker.register('service-worker.js');
+      await registration.update();
+    }catch(err){
+      console.warn('SW registration failed', err);
+    }
   });
 }
 if (window.pdfjsLib && window.pdfjsLib.GlobalWorkerOptions) {
