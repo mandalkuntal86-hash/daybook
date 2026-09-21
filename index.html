@@ -629,6 +629,18 @@
   <section class="panel" id="panel-entry">
     <div class="card">
       <h2>Entry for</h2>
+
+      <div class="field-row" style="margin-top:-8px; margin-bottom:14px;">
+        <div class="field" style="max-width:520px;">
+          <label for="tallyXmlFile">Import from Tally XML</label>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <input type="file" id="tallyXmlFile" accept=".xml,text/xml,application/xml" style="flex:1; min-width:220px; padding:9px 10px; border:1px solid var(--paper-line); border-radius:5px; background:#fff; font-family:'IBM Plex Mono', monospace; color:var(--ink);" />
+            <button class="btn btn-ghost" id="importTallyBtn" type="button">Load cash book</button>
+          </div>
+          <div class="hint" id="tallyImportStatus">Optional: choose a Tally XML export and only matching cash-book fields will be filled. Missing values stay blank.</div>
+        </div>
+      </div>
+
       <div class="field-row">
         <div class="field" style="max-width:220px;">
           <label for="entryDate">Date</label>
@@ -795,6 +807,17 @@
         </div>
       </div>
 
+      <div class="field-row">
+        <div class="field" style="flex:2;">
+          <label for="bankStatementFile">Bank statement file (optional)</label>
+          <div style="display:flex; gap:10px; align-items:center;">
+            <input type="file" id="bankStatementFile" accept=".pdf,.csv,.txt,.xml,.json,.xls,.xlsx,.png,.jpg,.jpeg" style="flex:1; min-width:220px; padding:9px 10px; border:1px solid var(--paper-line); border-radius:5px; background:#fff; font-family:'IBM Plex Mono', monospace; color:var(--ink);" />
+            <button class="btn btn-ghost" id="importBankStatementBtn" type="button">Auto-fill</button>
+          </div>
+          <div class="hint" id="bankStatementImportStatus">Upload a bank statement (PDF/CSV/TXT) to auto-fill the deposit and payee withdrawals.</div>
+        </div>
+      </div>
+
       <div class="field-row" id="incomingContraRow" style="display:none;">
         <div class="field">
           <label for="incomingContraDisplay">Received Via Transfer (Contra) (₹) — auto-recorded, not part of Collection</label>
@@ -812,8 +835,8 @@
           <input type="number" id="bankTotalCollection" min="0" step="0.01" value="0">
         </div>
         <div class="field">
-          <label for="bankCashDeposit">Cash Deposit (₹)</label>
-          <input type="number" id="bankCashDeposit" min="0" step="0.01" value="0">
+          <label for="bankCashDeposit">Deposit (₹)</label>
+          <input type="number" id="bankCashDeposit" min="0" step="0.01" value="0" placeholder="Total deposit from statement">
         </div>
       </div>
       <div class="field-row">
@@ -824,6 +847,7 @@
       </div>
 
       <div class="divider-label" style="margin-top:18px;">Payments (Payees)</div>
+      <div class="hint" style="margin-top:-4px; margin-bottom:12px; color:var(--ink-soft);">Use this section for each withdrawal amount from the statement. Add one payee per withdrawal.</div>
       <div class="field-row">
         <div class="field">
           <label for="payeeName">Payee Name</label>
@@ -927,6 +951,299 @@
   const SHOP_ID = 'main';
 
   const $ = (id) => document.getElementById(id);
+
+  function setTallyImportStatus(message, isError){
+    const el = $('tallyImportStatus');
+    el.textContent = message;
+    el.className = 'hint' + (isError ? ' status-msg err' : ' status-msg ok');
+    if(!isError){ el.style.color = 'var(--good)'; } else { el.style.color = 'var(--bad)'; }
+  }
+
+  function parseTallyAmount(rawValue){
+    if(rawValue === undefined || rawValue === null || rawValue === '') return undefined;
+    const cleaned = String(rawValue).replace(/[^0-9.,\-]/g, '');
+    if(!cleaned || cleaned === '-' || cleaned === '.') return undefined;
+    const normalized = cleaned.replace(/,/g, '');
+    const value = Number(normalized);
+    return Number.isFinite(value) ? value : undefined;
+  }
+
+  function formatImportDate(rawDate){
+    if(!rawDate) return undefined;
+    const cleaned = String(rawDate).trim();
+    const match = cleaned.match(/^(\d{4})(\d{2})(\d{2})$/);
+    if(match){ return `${match[1]}-${match[2]}-${match[3]}`; }
+    const slashMatch = cleaned.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+    if(slashMatch){
+      const dd = String(slashMatch[1]).padStart(2,'0');
+      const mm = String(slashMatch[2]).padStart(2,'0');
+      const yyyy = slashMatch[3];
+      return `${yyyy}-${mm}-${dd}`;
+    }
+    const isoMatch = cleaned.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if(isoMatch) return cleaned;
+    return undefined;
+  }
+
+  function normalizeImportNumber(rawValue){
+    const value = parseTallyAmount(rawValue);
+    if(value === undefined) return undefined;
+    return Math.abs(value);
+  }
+
+  function decodeHtmlEntities(value){
+    if(value === undefined || value === null) return value;
+    return String(value)
+      .replace(/&amp;/gi, '&')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/gi, "'")
+      .replace(/&#x27;/gi, "'")
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&#x2F;/gi, '/');
+  }
+
+  function parseTallyCashXml(xmlText){
+    if(!xmlText || !xmlText.trim()) return { found: false, message: 'No XML content found.' };
+
+    const xml = xmlText
+      .replace(/<\?xml[^>]*\?>/gi, '')
+      .replace(/<!--[\s\S]*?-->/g, '')
+      .replace(/\r/g, '');
+
+    const voucherBlocks = [...xml.matchAll(/<VOUCHER\b[\s\S]*?<\/VOUCHER>/gi)].map(match => match[0]);
+
+    const getDateFromVoucher = (voucherText) => {
+      const dateMatch = voucherText.match(/<DATE>\s*([^<>]+?)\s*<\/DATE>/i);
+      return dateMatch ? formatImportDate(dateMatch[1]) : undefined;
+    };
+
+    const getVoucherType = (voucherText) => {
+      const typeMatch = voucherText.match(/<VCHTYPE>\s*([^<>]+?)\s*<\/VCHTYPE>/i) ||
+        voucherText.match(/<VOUCHERTYPENAME>\s*([^<>]+?)\s*<\/VOUCHERTYPENAME>/i);
+      return typeMatch ? decodeHtmlEntities(typeMatch[1]).trim() : '';
+    };
+
+    const getVoucherNarration = (voucherText) => {
+      const narrationMatch = voucherText.match(/<NARRATION>\s*([^<>]+?)\s*<\/NARRATION>/i);
+      return narrationMatch ? decodeHtmlEntities(narrationMatch[1]).trim() : '';
+    };
+
+    const parseLedgerEntries = (voucherText) => {
+      const entries = [];
+      const blocks = [
+        ...voucherText.matchAll(/<(?:LEDGERENTRIES|ALLLEDGERENTRIES)\.LIST[\s\S]*?<\/(?:LEDGERENTRIES|ALLLEDGERENTRIES)\.LIST>/gi)
+      ].map(match => match[0]);
+
+      blocks.forEach(block => {
+        const nameMatch = block.match(/<LEDGERNAME>\s*([^<>]+?)\s*<\/LEDGERNAME>/i) || block.match(/<NAME>\s*([^<>]+?)\s*<\/NAME>/i);
+        const amountMatch = block.match(/<AMOUNT>\s*([-0-9.,]+)\s*<\/AMOUNT>/i) ||
+          block.match(/<VATEXPAMOUNT>\s*([-0-9.,]+)\s*<\/VATEXPAMOUNT>/i) ||
+          block.match(/<OPENINGBALANCE>\s*([-0-9.,]+)\s*<\/OPENINGBALANCE>/i);
+        const name = nameMatch ? decodeHtmlEntities(nameMatch[1]).trim() : '';
+        const amount = amountMatch ? normalizeImportNumber(amountMatch[1]) : undefined;
+        if(name || amount !== undefined){
+          entries.push({ name, amount });
+        }
+      });
+
+      return entries;
+    };
+
+    const sumAbsoluteAmounts = (entries) => entries.reduce((sum, item) => sum + (Number.isFinite(item.amount) ? Math.abs(item.amount) : 0), 0);
+
+    let openingBalance = undefined;
+    let cashFromHome = undefined;
+    let cashToHome = undefined;
+    let todaySale = 0;
+    const expenses = [];
+
+    voucherBlocks.forEach(voucherText => {
+      const voucherType = getVoucherType(voucherText);
+      const narration = getVoucherNarration(voucherText);
+      const entries = parseLedgerEntries(voucherText).filter(entry => Number.isFinite(entry.amount) && Math.abs(entry.amount) > 0);
+      const joinedNames = entries.map(entry => entry.name || '').join(' | ');
+      const partyLedgerMatch = voucherText.match(/<PARTYLEDGERNAME>\s*([^<>]+?)\s*<\/PARTYLEDGERNAME>/i) || voucherText.match(/<PARTYNAME>\s*([^<>]+?)\s*<\/PARTYNAME>/i);
+      const partyName = partyLedgerMatch ? decodeHtmlEntities(partyLedgerMatch[1]).trim() : '';
+      const cashLedgerTotal = entries
+        .filter(entry => /^cash$/i.test((entry.name || '').trim()))
+        .reduce((sum, entry) => sum + Math.abs(entry.amount), 0);
+
+      const isContraVoucher = /contra/i.test(voucherType) || /contra|cash deposit to bank|cash deposited|bank transfer/i.test(joinedNames);
+      const isPaymentVoucher = /^payment$/i.test((voucherType || '').trim());
+      const isReceiptVoucher = /^receipt$/i.test((voucherType || '').trim());
+      const isSaleVoucher = /(sales?|sale)$/i.test((voucherType || '').trim());
+      const isOpeningVoucher = /opening balance/i.test(voucherType) || /opening\s*balance/i.test(joinedNames);
+      const voucherPatternText = `${voucherType || ''} | ${joinedNames} | ${narration || ''}`.toLowerCase();
+      const hasHomeLedger = entries.some(entry => /^home$/i.test((entry.name || '').trim()) || /home/i.test((entry.name || '').trim()));
+      const isHomeCashIn = /cash\s*received\s*from\s*home|received\s*from\s*home|cash\s*from\s*home|from\s*home|cash\s*introduced|introduced\s*cash|home\s*cash|owner(?:'s)?\s*capital|capital\s*account|owner(?:'s)?\s*drawings|drawings\s*from\s*home/i.test(voucherPatternText)
+        || (hasHomeLedger && /cash/i.test(voucherPatternText) && !/sent\s*to\s*home|withdrawn\s*to\s*home|withdrawn\s*home|cash.*home.*withdraw|send.*home/i.test(voucherPatternText));
+      const isHomeCashOut = /cash\s*sent\s*to\s*home|sent\s*to\s*home|to\s*home|withdrawn\s*to\s*home|withdrawn\s*home|cash\s*withdrawn\s*for\s*home|home\s*withdrawal/i.test(voucherPatternText)
+        || (hasHomeLedger && /cash/i.test(voucherPatternText) && /sent\s*to\s*home|withdrawn\s*to\s*home|withdrawn\s*home|cash.*home.*withdraw|send.*home/i.test(voucherPatternText));
+
+      if(isOpeningVoucher){
+        const openingEntry = entries
+          .filter(entry => /opening\s*balance/i.test((entry.name || '').trim()) || /opening\s*balance/i.test(voucherType))
+          .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))[0];
+        if(openingEntry){
+          openingBalance = Math.abs(openingEntry.amount);
+        }
+      }
+
+      if(isPaymentVoucher && !isContraVoucher){
+        const candidate = entries
+          .filter(entry => {
+            const name = (entry.name || '').trim();
+            if(!name || /^cash$/i.test(name)) return false;
+            if(/^(cgst|sgst|igst|cess|tds|tcs|vat|gst|round(ing)?|sales tax)$/i.test(name)) return false;
+            if(/bank|contra|cash deposit|cash deposited|transfer|home|capital|owner/i.test(name)) return false;
+            return true;
+          })
+          .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))[0];
+
+        if(candidate){
+          expenses.push({
+            type: 'expense',
+            category: candidate.name,
+            amount: Math.abs(candidate.amount),
+            narration: narration || candidate.name
+          });
+        }
+        return;
+      }
+
+      if(isContraVoucher && !isHomeCashIn && !isHomeCashOut){
+        return;
+      }
+
+      const isCashParty = /^cash$/i.test((partyName || '').trim());
+      const shouldCountCashInvoice = (isSaleVoucher || isReceiptVoucher) && !isHomeCashIn && !isHomeCashOut && (isCashParty || cashLedgerTotal > 0);
+
+      if(shouldCountCashInvoice){
+        const amountToAdd = cashLedgerTotal > 0 ? cashLedgerTotal : 0;
+        if(amountToAdd > 0){
+          todaySale += amountToAdd;
+        }
+      }
+
+      const homeInEntries = entries.filter(entry => {
+        const name = (entry.name || '').trim();
+        return /cash\s*received\s*from\s*home|received\s*from\s*home|cash\s*from\s*home|from\s*home|cash\s*introduced|introduced\s*cash|home\s*cash|owner(?:'s)?\s*capital|capital\s*account|owner(?:'s)?\s*drawings|drawings\s*from\s*home/i.test(name) ||
+          ((/capital|owner|home/i.test(name) || /capital|owner|home/i.test(narration || '')) && /cash/i.test(name));
+      });
+      if(homeInEntries.length){
+        const preferredHomeIn = (homeInEntries.filter(entry => /^cash$/i.test((entry.name || '').trim())).sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))[0] ||
+          homeInEntries.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))[0]);
+        if(preferredHomeIn){
+          cashFromHome = (cashFromHome === undefined ? 0 : cashFromHome) + Math.abs(preferredHomeIn.amount);
+        }
+      }
+
+      const homeOutEntries = entries.filter(entry => {
+        const name = (entry.name || '').trim();
+        return /cash\s*sent\s*to\s*home|sent\s*to\s*home|to\s*home|withdrawn\s*to\s*home|withdrawn\s*home|cash\s*withdrawn\s*for\s*home|home\s*withdrawal/i.test(name) ||
+          ((/capital|owner|home/i.test(name) || /capital|owner|home/i.test(narration || '')) && /cash/i.test(name) && /withdraw|send|transfer/i.test(name));
+      });
+      if(homeOutEntries.length){
+        const preferredHomeOut = (homeOutEntries.filter(entry => /^cash$/i.test((entry.name || '').trim())).sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))[0] ||
+          homeOutEntries.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))[0]);
+        if(preferredHomeOut){
+          cashToHome = (cashToHome === undefined ? 0 : cashToHome) + Math.abs(preferredHomeOut.amount);
+        }
+      }
+    });
+
+    const found = openingBalance !== undefined || cashFromHome !== undefined || cashToHome !== undefined || todaySale > 0 || expenses.length > 0;
+
+    return {
+      found,
+      date: voucherBlocks.length ? getDateFromVoucher(voucherBlocks[0]) : undefined,
+      openingBalance,
+      cashFromHome,
+      todaySale: todaySale > 0 ? todaySale : undefined,
+      cashToHome,
+      expenses,
+      deposits: [],
+      denomination: []
+    };
+  }
+
+  function applyParsedTallyToCashForm(parsedData){
+    if(!parsedData || !parsedData.found){
+      setTallyImportStatus('No matching cash-book data was found in this XML file.', true);
+      return false;
+    }
+
+    const setBlankOrNumber = (field, value) => {
+      if(value === undefined || value === null || Number.isNaN(Number(value))){
+        field.value = '';
+        return;
+      }
+      field.value = Number(value).toFixed(2);
+    };
+
+    if(parsedData.date) $('entryDate').value = parsedData.date;
+
+    if(parsedData.openingBalance !== undefined && parsedData.openingBalance !== null && !Number.isNaN(Number(parsedData.openingBalance))){
+      setBlankOrNumber($('openingBalance'), parsedData.openingBalance);
+    }
+    if(parsedData.cashFromHome !== undefined && parsedData.cashFromHome !== null && !Number.isNaN(Number(parsedData.cashFromHome))){
+      setBlankOrNumber($('cashFromHome'), parsedData.cashFromHome);
+    } else {
+      $('cashFromHome').value = '';
+    }
+    if(parsedData.todaySale !== undefined && parsedData.todaySale !== null && !Number.isNaN(Number(parsedData.todaySale))){
+      setBlankOrNumber($('todaySale'), parsedData.todaySale);
+    } else {
+      $('todaySale').value = '';
+    }
+
+    clearExpenseRows();
+    clearDepositRows();
+    if(parsedData.expenses && parsedData.expenses.length){
+      parsedData.expenses.forEach(item => addExpenseRow(item.type || 'expense', item.category || 'Expense', item.amount || 0, item.narration || ''));
+    } else {
+      addExpenseRow('expense', '', '', '');
+    }
+    if(parsedData.deposits && parsedData.deposits.length){
+      parsedData.deposits.forEach(item => addDepositRow(item.amount || 0, item.note || ''));
+    } else {
+      addDepositRow('', '');
+    }
+
+    if(parsedData.cashToHome !== undefined && parsedData.cashToHome !== null && !Number.isNaN(Number(parsedData.cashToHome))){
+      setBlankOrNumber($('cashToHome'), parsedData.cashToHome);
+    } else {
+      $('cashToHome').value = '';
+    }
+    clearDenomGrid();
+    updateDenomTotal();
+    recalcLive();
+
+    setTallyImportStatus('Tally XML loaded. Matching cash-book fields were filled; missing values were left blank, and opening balance stayed as the current prior closing balance when absent in XML.', false);
+    return true;
+  }
+
+  async function loadTallyXmlFile(){
+    const file = $('tallyXmlFile').files && $('tallyXmlFile').files[0];
+    if(!file){
+      setTallyImportStatus('Choose a Tally XML file first.', true);
+      return;
+    }
+
+    try{
+      const xmlText = await file.text();
+      const parsed = parseTallyCashXml(xmlText);
+      applyParsedTallyToCashForm(parsed);
+    } catch (error) {
+      console.error('Tally XML import failed:', error);
+      setTallyImportStatus('This file could not be read as XML. Please try another export.', true);
+    }
+  }
+
+  $('importTallyBtn').addEventListener('click', loadTallyXmlFile);
+  $('tallyXmlFile').addEventListener('change', loadTallyXmlFile);
 
   function sanitizeKey(key){
     // Firestore doc IDs can't contain '/'; our keys never do, but guard anyway
@@ -2141,6 +2458,278 @@
     }
   }
 
+  function showBankStatementStatus(msg, isErr){
+    const el = $('bankStatementImportStatus');
+    el.textContent = msg;
+    el.className = 'hint' + (isErr ? ' status-msg err' : ' status-msg ok');
+    if(!isErr){ el.style.color = 'var(--good)'; } else { el.style.color = 'var(--bad)'; }
+  }
+
+  function parseCurrencyAmount(rawValue){
+    if(rawValue === undefined || rawValue === null || rawValue === '') return 0;
+    const value = String(rawValue).replace(/[₹RsA-Za-z,]/gi, '').replace(/[^0-9.\-]/g, '');
+    if(!value || value === '-' || value === '.') return 0;
+    const num = Number(value);
+    return Number.isFinite(num) ? num : 0;
+  }
+
+  function normalizeStatementBankName(text){
+    const match = String(text || '').match(/(?:\b[A-Z][A-Za-z&.-]+(?:\s+[A-Z][A-Za-z&.-]+)*)\s+(?:BANK|BANKING|FINANCE)/i);
+    if(match && match[0]) return match[0].replace(/\s+/g, ' ').trim();
+    const fallback = String(text || '').match(/(?:HDFC|ICICI|SBI|AXIS|YES\s*BANK|KOTAK|PNB|UNION\s*BANK|UCO|CANARA|IDBI|RBL|BANDHAN|BOI|HSBC|FEDERAL|INDUSIND|BANK\s*OF\s*BARODA)/i);
+    return fallback ? fallback[0].replace(/\s+/g, ' ').trim() : '';
+  }
+
+  function parseBankStatementText(text, fileName = ''){
+    if(!text || !text.trim()) return null;
+
+    const lines = String(text)
+      .replace(/\r/g, '')
+      .split(/\n+/)
+      .map(line => line.trim())
+      .filter(Boolean);
+
+    if(lines.length === 0) return null;
+
+    const detectedBankName = normalizeStatementBankName(text) || fileName.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim();
+    let totalDeposit = 0;
+    const payees = [];
+    const seen = new Set();
+
+    const extractCurrencyValues = (line) => {
+      const moneyMatches = [...line.matchAll(/\b\d{1,3}(?:,\d{3})+\.\d{2}\b|\b\d+\.\d{2}\b/g)];
+      if(moneyMatches.length) return moneyMatches.map(match => Math.abs(parseCurrencyAmount(match[0])));
+      return [...line.matchAll(/-?\d[\d,]*\.?\d{0,2}/g)]
+        .map(match => Math.abs(parseCurrencyAmount(match[0])))
+        .filter(value => value > 0 && value < 1000000000);
+    };
+
+    const cleanPayeeName = (raw) => {
+      let name = String(raw || '')
+        .replace(/(?:₹|rs|inr)/gi, ' ')
+        .replace(/[-|/]+/g, ' ')
+        .replace(/\d[\d,]*\.?\d{0,2}/g, ' ')
+        .replace(/\b(?:withdrawal|withdraw|debit|dr|payment|paid|credit|cr|deposit|cash|bank|atm|pos|upi|imps|neft|rtgs|txn|ref|cheque|chq|dd|transfer|self|salary|refund|interest|fee|tax|emi|merchant|invoice|bill|date|time|on|at)\b/gi, ' ')
+        .replace(/(?:\b[A-Z]{2,}\d{2,}\b)/g, ' ')
+        .replace(/[\u20B9\s:;,.]+$/g, '')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+
+      if(!name || name.length < 2) return '';
+      name = name.replace(/^[:\-\s]+|[:\-\s]+$/g, '');
+      name = name.replace(/\b(?:from|to|by)\b/gi, ' ');
+      return name.replace(/\s{2,}/g, ' ').trim();
+    };
+
+    lines.forEach((line) => {
+      const lower = line.toLowerCase();
+      const moneyValues = extractCurrencyValues(line);
+      if(!moneyValues.length) return;
+
+      const transactionAmount = moneyValues.length > 1 ? moneyValues[moneyValues.length - 2] : moneyValues[0];
+      const amount = transactionAmount || moneyValues[0];
+      if(!amount || amount < 1) return;
+
+      const hasCreditKeyword = /(credit|deposit|cash\s*in|cash\s*credit|received|refund|salary|interest|inward|credited|cr|deposit\s*amount)/i.test(lower);
+      const hasDebitKeyword = /(debit|withdrawal|withdraw|payment|paid|atm|pos|upi|imps|neft|rtgs|cheque|dd|bill|fee|tax|emi|merchant|purchase|invoice|outward|cash\s*out|transfer|cash\s*out|paid\s*to)/i.test(lower);
+      const hasDrLabel = /\bdr\b/i.test(lower);
+      const hasCrLabel = /\bcr\b/i.test(lower);
+      const hasWithdrawalColumn = /withdrawal\s*amt|withdrawal|debit|dr/i.test(lower);
+      const hasDepositColumn = /deposit\s*amt|credit|deposit|cr/i.test(lower);
+
+      if((hasCreditKeyword || hasCrLabel || (hasDepositColumn && !hasWithdrawalColumn)) && !hasDebitKeyword && !hasDrLabel){
+        totalDeposit += amount;
+        return;
+      }
+
+      if((hasDebitKeyword || hasDrLabel || hasWithdrawalColumn || (!hasCreditKeyword && !hasCrLabel && !hasDepositColumn && !hasWithdrawalColumn && moneyValues.length >= 2)) && !hasCreditKeyword && !hasCrLabel && !hasDepositColumn){
+        const payeeName = cleanPayeeName(line);
+        if(payeeName && payeeName.length > 2 && payeeName.length < 80){
+          const key = `${payeeName.toLowerCase()}::${amount}`;
+          if(!seen.has(key)){
+            seen.add(key);
+            payees.push({ name: payeeName, amount });
+          }
+        }
+      }
+    });
+
+    if(payees.length === 0 && totalDeposit === 0){
+      lines.forEach((line) => {
+        const lower = line.toLowerCase();
+        const moneyValues = extractCurrencyValues(line);
+        if(!moneyValues.length) return;
+        const amount = moneyValues.length > 1 ? moneyValues[moneyValues.length - 2] : moneyValues[0];
+        if(!amount) return;
+
+        const isLikelyDeposit = /(credit|deposit|received|cash\s*in|refund|salary|interest)/i.test(lower) || /\bcr\b/i.test(lower) || (/deposit\s*amt/i.test(lower) && !/withdrawal\s*amt|withdrawal|debit|dr/i.test(lower));
+        const isLikelyWithdrawal = /(debit|withdraw|payment|paid|atm|upi|pos|merchant|invoice|bill|cheque|dd|transfer|cash\s*out)/i.test(lower) || /\bdr\b/i.test(lower) || /withdrawal\s*amt/i.test(lower);
+
+        if(isLikelyDeposit && !isLikelyWithdrawal){
+          totalDeposit += amount;
+          return;
+        }
+
+        if(isLikelyWithdrawal && !isLikelyDeposit){
+          const payeeName = cleanPayeeName(line);
+          if(payeeName && payeeName.length > 2 && payeeName.length < 80){
+            const key = `${payeeName.toLowerCase()}::${amount}`;
+            if(!seen.has(key)){
+              seen.add(key);
+              payees.push({ name: payeeName, amount });
+            }
+          }
+        }
+      });
+    }
+
+    return {
+      bankName: detectedBankName,
+      deposit: Number(totalDeposit.toFixed(2)),
+      payees,
+      narration: 'Imported from statement: ' + (fileName || 'bank statement')
+    };
+  }
+
+  function normalizeStatementText(rawText){
+    if(!rawText) return '';
+    return String(rawText)
+      .replace(/\u00a0/g, ' ')
+      .replace(/\r/g, '')
+      .replace(/\s+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  async function extractPdfTextFromFile(file){
+    if(!window.pdfjsLib || !window.pdfjsLib.getDocument){
+      throw new Error('PDF parser is unavailable in this browser. Please upload a CSV/TXT file instead.');
+    }
+    const workerOptions = window.pdfjsLib.GlobalWorkerOptions || {};
+    workerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await window.pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
+    let text = '';
+    for(let pageNum = 1; pageNum <= pdf.numPages; pageNum++){
+      const page = await pdf.getPage(pageNum);
+      const content = await page.getTextContent();
+      const rowMap = new Map();
+
+      (content.items || []).forEach(item => {
+        if(!item || !item.str) return;
+        const transform = item.transform || [0, 0, 0, 0, 0, 0];
+        const x = Number(transform[4] || 0);
+        const y = Math.round(Number(transform[5] || 0));
+        const key = Math.round(y / 4);
+        if(!rowMap.has(key)) rowMap.set(key, []);
+        rowMap.get(key).push({ x, text: String(item.str) });
+      });
+
+      const rows = Array.from(rowMap.entries())
+        .sort((a, b) => b[0] - a[0])
+        .map(([_, items]) => items
+          .sort((a, b) => a.x - b.x)
+          .map(item => item.text)
+          .join(' ')
+          .trim())
+        .filter(Boolean);
+
+      text += rows.join('\n') + '\n';
+    }
+    return normalizeStatementText(text);
+  }
+
+  async function ocrPdfTextFromFile(file){
+    if(!window.Tesseract || !window.Tesseract.recognize){
+      return '';
+    }
+
+    if(!window.pdfjsLib || !window.pdfjsLib.getDocument){
+      return '';
+    }
+
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await window.pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
+    let ocrText = '';
+
+    for(let pageNum = 1; pageNum <= pdf.numPages; pageNum++){
+      const page = await pdf.getPage(pageNum);
+      const viewport = page.getViewport({ scale: 1.6 });
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d');
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      await page.render({ canvasContext: context, viewport }).promise;
+      const dataUrl = canvas.toDataURL('image/png');
+      const result = await window.Tesseract.recognize(dataUrl, 'eng', { logger: () => {} });
+      const pageText = (result && result.data && result.data.text) ? String(result.data.text) : '';
+      ocrText += normalizeStatementText(pageText) + '\n';
+    }
+
+    return ocrText;
+  }
+
+  async function autoFillFromBankStatementFile(){
+    const file = $('bankStatementFile').files && $('bankStatementFile').files[0];
+    if(!file){
+      showBankStatementStatus('Choose a bank statement file first.', true);
+      return;
+    }
+
+    try{
+      let text = '';
+      const lowerName = file.name.toLowerCase();
+      if(lowerName.endsWith('.pdf')){
+        try{
+          text = await extractPdfTextFromFile(file);
+          if(!text || text.replace(/\s/g, '').length < 30){
+            text = await ocrPdfTextFromFile(file);
+          }
+        } catch (pdfErr) {
+          console.warn('PDF text extraction failed, trying OCR:', pdfErr);
+          text = await ocrPdfTextFromFile(file);
+        }
+      } else {
+        text = await file.text();
+      }
+
+      const parsed = parseBankStatementText(text, file.name);
+      if(!parsed || (!parsed.deposit && parsed.payees.length === 0)){
+        showBankStatementStatus('This statement could not be read automatically. Try a CSV/TXT export or enter details manually.', true);
+        return;
+      }
+
+      if(parsed.bankName && !$('bankSelect').value){
+        const match = Array.from($('bankSelect').options).find(opt => opt.text.toLowerCase().includes(parsed.bankName.toLowerCase()));
+        if(match) $('bankSelect').value = match.value;
+      }
+
+      if(parsed.deposit > 0){
+        $('bankCashDeposit').value = parsed.deposit.toFixed(2);
+      }
+      if(parsed.payees.length){
+        payeesList = parsed.payees.map(({name, amount}) => ({ name, amount }));
+        updatePayeeDisplay();
+      }
+      if(parsed.narration){
+        $('bankNarration').value = parsed.narration;
+      }
+      calculateClosingBalance();
+      showBankStatementStatus('Statement imported and mapped to deposit + payment rows.', false);
+    } catch (error) {
+      console.error('Bank statement import failed:', error);
+      showBankStatementStatus('This file could not be read automatically. Please try a CSV/TXT export or manually enter the details.', true);
+    }
+  }
+
+  async function loadBankStatementFile(){
+    await autoFillFromBankStatementFile();
+  }
+
+  $('importBankStatementBtn').addEventListener('click', loadBankStatementFile);
+  $('bankStatementFile').addEventListener('change', loadBankStatementFile);
+
   function resetBankEntryFields(){
     $('accountNumber').value = '';
     $('bankOpeningBalance').value = 0;
@@ -3128,11 +3717,16 @@
     loadBankMonthReport(t.slice(0,7));
   })();
 </script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script>
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('service-worker.js').catch(err => console.warn('SW registration failed', err));
   });
+}
+if (window.pdfjsLib && window.pdfjsLib.GlobalWorkerOptions) {
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 }
 </script>
 </body>
