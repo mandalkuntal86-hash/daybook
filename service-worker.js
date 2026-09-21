@@ -1,4 +1,4 @@
-const CACHE_NAME = 'cash-book-shell-v5';
+const CACHE_NAME = 'cash-book-shell-v7';
 const APP_SHELL = [
   './',
   './index.html',
@@ -30,10 +30,17 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   const isShellFile = APP_SHELL.some((f) => url.pathname.endsWith(f.replace('./', '/')) || url.pathname === '/' );
+  const isNavigation = event.request.mode === 'navigate';
 
-  if (event.request.method === 'GET' && url.origin === self.location.origin && isShellFile) {
+  if (event.request.method === 'GET' && url.origin === self.location.origin && (isShellFile || isNavigation)) {
     event.respondWith(
-      caches.match(event.request).then((cached) => cached || fetch(event.request))
+      fetch(event.request)
+        .then((response) => {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+          return response;
+        })
+        .catch(() => caches.match(event.request).then((cached) => cached || caches.match('./index.html')))
     );
   }
 });
