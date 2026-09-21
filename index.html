@@ -1042,7 +1042,7 @@
           block.match(/<VATEXPAMOUNT>\s*([-0-9.,]+)\s*<\/VATEXPAMOUNT>/i) ||
           block.match(/<OPENINGBALANCE>\s*([-0-9.,]+)\s*<\/OPENINGBALANCE>/i);
         const name = nameMatch ? decodeHtmlEntities(nameMatch[1]).trim() : '';
-        const amount = amountMatch ? normalizeImportNumber(amountMatch[1]) : undefined;
+        const amount = amountMatch ? parseTallyAmount(amountMatch[1]) : undefined;
         if(name || amount !== undefined){
           entries.push({ name, amount });
         }
@@ -1069,6 +1069,9 @@
       const cashLedgerTotal = entries
         .filter(entry => /^cash$/i.test((entry.name || '').trim()))
         .reduce((sum, entry) => sum + Math.abs(entry.amount), 0);
+      const cashLedgerAmount = entries
+        .filter(entry => /^cash$/i.test((entry.name || '').trim()))
+        .reduce((sum, entry) => sum + entry.amount, 0);
 
       const isContraVoucher = /contra/i.test(voucherType) || /contra|cash deposit to bank|cash deposited|bank transfer/i.test(joinedNames);
       const isPaymentVoucher = /^payment$/i.test((voucherType || '').trim());
@@ -1076,11 +1079,10 @@
       const isSaleVoucher = /(sales?|sale)$/i.test((voucherType || '').trim());
       const isOpeningVoucher = /opening balance/i.test(voucherType) || /opening\s*balance/i.test(joinedNames);
       const voucherPatternText = `${voucherType || ''} | ${joinedNames} | ${narration || ''}`.toLowerCase();
-      const hasHomeLedger = entries.some(entry => /^home$/i.test((entry.name || '').trim()) || /home/i.test((entry.name || '').trim()));
-      const isHomeCashIn = /cash\s*received\s*from\s*home|received\s*from\s*home|cash\s*from\s*home|from\s*home|cash\s*introduced|introduced\s*cash|home\s*cash|owner(?:'s)?\s*capital|capital\s*account|owner(?:'s)?\s*drawings|drawings\s*from\s*home/i.test(voucherPatternText)
-        || (hasHomeLedger && /cash/i.test(voucherPatternText) && !/sent\s*to\s*home|withdrawn\s*to\s*home|withdrawn\s*home|cash.*home.*withdraw|send.*home/i.test(voucherPatternText));
-      const isHomeCashOut = /cash\s*sent\s*to\s*home|sent\s*to\s*home|to\s*home|withdrawn\s*to\s*home|withdrawn\s*home|cash\s*withdrawn\s*for\s*home|home\s*withdrawal/i.test(voucherPatternText)
-        || (hasHomeLedger && /cash/i.test(voucherPatternText) && /sent\s*to\s*home|withdrawn\s*to\s*home|withdrawn\s*home|cash.*home.*withdraw|send.*home/i.test(voucherPatternText));
+      const homeEntries = entries.filter(entry => /^home$/i.test((entry.name || '').trim()) || /home/i.test((entry.name || '').trim()));
+      const hasHomeTransferDirection = homeEntries.length > 0 && cashLedgerAmount !== 0;
+      const isHomeCashIn = hasHomeTransferDirection && homeEntries.some(entry => entry.amount > 0) && cashLedgerAmount < 0;
+      const isHomeCashOut = hasHomeTransferDirection && homeEntries.some(entry => entry.amount < 0) && cashLedgerAmount > 0;
 
       if(isOpeningVoucher){
         const openingEntry = entries
@@ -1091,29 +1093,23 @@
         }
       }
 
-      if(isPaymentVoucher && !isContraVoucher){
-        const candidates = entries
-          .filter(entry => {
-            const name = (entry.name || '').trim();
-            if(!name || /^cash$/i.test(name)) return false;
-            if(/^(cgst|sgst|igst|cess|tds|tcs|vat|gst|round(ing)?|sales tax)$/i.test(name)) return false;
-            if(/bank|contra|cash deposit|cash deposited|transfer|home|capital|drawings?/i.test(name)) return false;
-            return true;
-          })
-          .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
-
-        candidates.forEach(candidate => {
-          expenses.push({
-            type: 'expense',
-            category: candidate.name,
-            amount: Math.abs(candidate.amount),
-            narration: narration || candidate.name
-          });
-        });
+      if(isContraVoucher && !isHomeCashIn && !isHomeCashOut){
         return;
       }
 
-      if(isContraVoucher && !isHomeCashIn && !isHomeCashOut){
+      if(isPaymentVoucher && !isContraVoucher && !isHomeCashIn && !isHomeCashOut && cashLedgerAmount > 0){
+        entries
+          .filter(entry => entry.amount < 0)
+          .filter(entry => {
+            const name = (entry.name || '').trim();
+            return name && !/^cash$/i.test(name) && !/^(cgst|sgst|igst|cess|tds|tcs|vat|gst|round(ing)?|sales tax)$/i.test(name);
+          })
+          .forEach(entry => expenses.push({
+            type: 'expense',
+            category: entry.name,
+            amount: Math.abs(entry.amount),
+            narration: narration || entry.name
+          }));
         return;
       }
 
@@ -1127,11 +1123,7 @@
         }
       }
 
-      const homeInEntries = entries.filter(entry => {
-        const name = (entry.name || '').trim();
-        return /cash\s*received\s*from\s*home|received\s*from\s*home|cash\s*from\s*home|from\s*home|cash\s*introduced|introduced\s*cash|home\s*cash|owner(?:'s)?\s*capital|capital\s*account|owner(?:'s)?\s*drawings|drawings\s*from\s*home/i.test(name) ||
-          ((/capital|owner|home/i.test(name) || /capital|owner|home/i.test(narration || '')) && /cash/i.test(name));
-      });
+      const homeInEntries = isHomeCashIn ? homeEntries.filter(entry => entry.amount > 0) : [];
       if(homeInEntries.length){
         const preferredHomeIn = (homeInEntries.filter(entry => /^cash$/i.test((entry.name || '').trim())).sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))[0] ||
           homeInEntries.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))[0]);
@@ -1140,11 +1132,7 @@
         }
       }
 
-      const homeOutEntries = entries.filter(entry => {
-        const name = (entry.name || '').trim();
-        return /cash\s*sent\s*to\s*home|sent\s*to\s*home|to\s*home|withdrawn\s*to\s*home|withdrawn\s*home|cash\s*withdrawn\s*for\s*home|home\s*withdrawal/i.test(name) ||
-          ((/capital|owner|home/i.test(name) || /capital|owner|home/i.test(narration || '')) && /cash/i.test(name) && /withdraw|send|transfer/i.test(name));
-      });
+      const homeOutEntries = isHomeCashOut ? homeEntries.filter(entry => entry.amount < 0) : [];
       if(homeOutEntries.length){
         const preferredHomeOut = (homeOutEntries.filter(entry => /^cash$/i.test((entry.name || '').trim())).sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))[0] ||
           homeOutEntries.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))[0]);
@@ -1154,7 +1142,7 @@
       }
     });
 
-    const found = openingBalance !== undefined || cashFromHome !== undefined || cashToHome !== undefined || todaySale > 0 || expenses.length > 0;
+    const found = openingBalance !== undefined || cashFromHome !== undefined || cashToHome !== undefined || todaySale > 0;
 
     return {
       found,
@@ -1164,8 +1152,7 @@
       todaySale: todaySale > 0 ? todaySale : undefined,
       cashToHome,
       expenses,
-      deposits: [],
-      denomination: []
+      cashOnly: true
     };
   }
 
@@ -1199,23 +1186,14 @@
       $('todaySale').value = '';
     }
 
-    clearExpenseRows();
-    clearDepositRows();
-    if(parsedData.expenses && parsedData.expenses.length){
-      parsedData.expenses.forEach(item => addExpenseRow(item.type || 'expense', item.category || 'Expense', item.amount || 0, item.narration || ''));
-    } else {
-      addExpenseRow('expense', '', '', '');
-    }
-    if(parsedData.deposits && parsedData.deposits.length){
-      parsedData.deposits.forEach(item => addDepositRow(item.amount || 0, item.note || ''));
-    } else {
-      addDepositRow('', '');
-    }
-
     if(parsedData.cashToHome !== undefined && parsedData.cashToHome !== null && !Number.isNaN(Number(parsedData.cashToHome))){
       setBlankOrNumber($('cashToHome'), parsedData.cashToHome);
     } else {
       $('cashToHome').value = '';
+    }
+    if(parsedData.expenses && parsedData.expenses.length){
+      clearExpenseRows();
+      parsedData.expenses.forEach(item => addExpenseRow(item.type || 'expense', item.category || 'Expense', item.amount || 0, item.narration || ''));
     }
     clearDenomGrid();
     updateDenomTotal();
