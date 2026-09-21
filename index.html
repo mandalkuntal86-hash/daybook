@@ -1073,13 +1073,18 @@
         .filter(entry => /^cash$/i.test((entry.name || '').trim()))
         .reduce((sum, entry) => sum + entry.amount, 0);
 
+      const voucherTypeText = (voucherType || '').trim().toLowerCase();
+      const joinedNamesText = (joinedNames || '').toLowerCase();
       const isContraVoucher = /contra/i.test(voucherType) || /contra|cash deposit to bank|cash deposited|bank transfer/i.test(joinedNames);
-      const isPaymentVoucher = /^payment$/i.test((voucherType || '').trim());
-      const isReceiptVoucher = /^receipt$/i.test((voucherType || '').trim());
-      const isSaleVoucher = /(sales?|sale)$/i.test((voucherType || '').trim());
+      const isPaymentVoucher = /payment/i.test(voucherTypeText) || /payment/i.test(joinedNamesText);
+      const isReceiptVoucher = /receipt/i.test(voucherTypeText) || /receipt/i.test(joinedNamesText);
+      const isSaleVoucher = /sale/i.test(voucherTypeText) || /sale/i.test(joinedNamesText);
       const isOpeningVoucher = /opening balance/i.test(voucherType) || /opening\s*balance/i.test(joinedNames);
       const voucherPatternText = `${voucherType || ''} | ${joinedNames} | ${narration || ''}`.toLowerCase();
-      const homeEntries = entries.filter(entry => /^home$/i.test((entry.name || '').trim()) || /home/i.test((entry.name || '').trim()));
+      const homeEntries = entries.filter(entry => {
+        const n = (entry.name || '').trim();
+        return /^home$/i.test(n) || (/home/i.test(n) && !/home\s+expense/i.test(n));
+      });
       const hasHomeTransferDirection = homeEntries.length > 0 && cashLedgerAmount !== 0;
       const isHomeCashIn = hasHomeTransferDirection && homeEntries.some(entry => entry.amount > 0) && cashLedgerAmount < 0;
       const isHomeCashOut = hasHomeTransferDirection && homeEntries.some(entry => entry.amount < 0) && cashLedgerAmount > 0;
@@ -1097,19 +1102,22 @@
         return;
       }
 
-      if(isPaymentVoucher && !isContraVoucher && !isHomeCashIn && !isHomeCashOut && cashLedgerAmount > 0){
-        entries
-          .filter(entry => entry.amount < 0)
-          .filter(entry => {
-            const name = (entry.name || '').trim();
-            return name && !/^cash$/i.test(name) && !/^(cgst|sgst|igst|cess|tds|tcs|vat|gst|round(ing)?|sales tax)$/i.test(name);
-          })
-          .forEach(entry => expenses.push({
-            type: 'expense',
-            category: entry.name,
-            amount: Math.abs(entry.amount),
-            narration: narration || entry.name
-          }));
+      const paymentExpenseCandidates = entries.filter(entry => {
+        const name = (entry.name || '').trim();
+        if(!name) return false;
+        if(/^cash$/i.test(name) || /^home$/i.test(name) || /^bank$/i.test(name) || /^bank account$/i.test(name)) return false;
+        if(/home\s+expense/i.test(name)) return true;
+        if(/^(cgst|sgst|igst|cess|tds|tcs|vat|gst|round(ing)?|sales tax)$/i.test(name)) return false;
+        return true;
+      });
+
+      if(isPaymentVoucher && !isContraVoucher && !isHomeCashIn && !isHomeCashOut && paymentExpenseCandidates.length){
+        paymentExpenseCandidates.forEach(entry => expenses.push({
+          type: 'expense',
+          category: entry.name,
+          amount: Math.abs(entry.amount),
+          narration: narration || entry.name
+        }));
         return;
       }
 
